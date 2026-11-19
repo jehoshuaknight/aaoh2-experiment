@@ -366,6 +366,8 @@ float borderZoom()
     return smoothstep(0.08, 0.9, abs(draw.extra.w));
 }
 
+uint2 dataDims() { uint w, h; dataTexture.GetDimensions(w, h); return uint2(w, h); }
+
 // A region's own colour from its id (g = (128 + region) / 255 on land): muted for fills,
 // vivid for the light along its edges.
 float3 regionHue(float g)
@@ -427,6 +429,64 @@ float regionGlowRadius()
     return lerp(3.0, 10.0, borderZoom());
 }
 
+// ------------------------------------------------------------------------------------------------
+// Peoples of 2240 (0.1.7): map style 2 draws the ethnic map in game. The region comes exactly from the
+// province data (g channel); inside it the province is the nearest centre, with a ragged, noisy edge
+// between neighbours, and inside the province its peoples interleave in patches by their shares.
+// ------------------------------------------------------------------------------------------------
+#include "ethnicity_tables.slang"
+
+float3 ethColour(uint g)
+{
+    uint c = ethColourHex(g);
+    return float3(float((c >> 16) & 255u), float((c >> 8) & 255u), float(c & 255u)) / 255.0;
+}
+
+// The colour of the people at a point (display values), and how mixed the place is (0..1).
+float3 peoplesAt(float3 up, float regionG, bool earth, float2 ll, out float mixed)
+{
+    mixed = 0.0;
+    int r = int(floor(regionG * 255.0 + 0.5)) - 128;
+    uint nreg = earth ? EARTH_REGIONS : MARS_REGIONS;
+    if (r < 0 || uint(r) >= nreg)
+        return float3(0.45, 0.43, 0.40);
+    uint2 range = regionRange(uint(r) + (earth ? 0u : EARTH_REGIONS));
+    uint s = range.x, e = range.y;
+    if (e <= s)
+        return float3(0.45, 0.43, 0.40);
+    float d1 = 9.0, d2 = 9.0;
+    uint i1 = s, i2 = s;
+    for (uint i = s; i < e && i < s + 64u; i++)
+    {
+        uint a = provinceCentre(i);
+        float lat = radians(float(a & 1023u) / 1023.0 * 180.0 - 90.0);
+        float lon = radians(float((a >> 10) & 2047u) / 2047.0 * 360.0 - 180.0);
+        float3 c = float3(cos(lat) * cos(lon), sin(lat), -cos(lat) * sin(lon));
+        float d = 1.0 - dot(up, c);
+        if (d < d1) { d2 = d1; i2 = i1; d1 = d; i1 = i; }
+        else if (d < d2) { d2 = d; i2 = i; }
+    }
+    // A ragged edge between the two nearest provinces of the region, never a straight line.
+    float edgeN = hl_fbm(ll * 0.45 + 3.7);
+    float t = (d2 - d1) / max(d2 + d1, 1e-6);
+    uint pi = (e - s > 1u && t < 0.16 * edgeN) ? i2 : i1;
+    uint2 mx = provinceMix(pi);
+    float s1 = float((mx.y >> 16) & 127u) / 100.0, s2 = float((mx.x >> 18) & 127u) / 100.0;
+    // Peoples interleave in patches: a coherent noise field picks one by the shares.
+    float seed = float(pi) * 1.731;
+    float m = hl_fbm(ll * 1.1 + seed) * 0.75 + hl_noise(ll * 4.5 - seed) * 0.25;
+    float u = saturate((m - 0.28) / 0.44);
+    uint g1 = mx.x & 511u, g2 = (mx.x >> 9) & 511u, g3 = mx.y & 511u;
+    uint g = u < s1 ? g1 : (u < s1 + s2 ? g2 : g3);
+    // Patch edges blend a little, as on a painted ethnographic map.
+    float soft = min(abs(u - s1), abs(u - s1 - s2));
+    uint go = u < s1 ? g2 : g1;
+    float k = 0.35 * (1.0 - smoothstep(0.0, 0.04, soft)) * step(0.001, s2);
+    float3 col = lerp(ethColour(g), ethColour(go), k);
+    mixed = 1.0 - s1;
+    return col;
+}
+
 // Helios's map styles for a planet surface, from GlobeTerrain's globe shader (u_style branches).
 // style 1 = Strategic, 2 = Satellite Night, 3 = Holo Table.
 float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
@@ -484,6 +544,19 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
         S = water ? float3(0.006, 0.009, 0.016) + float3(0.03, 0.12, 0.14) * near * 0.35 : lerp(float3(lumS, lumS, lumS) * 0.32 + 0.03, ink, own) * rel;
         lineP = float3(0.22, 0.62, 0.66); lineC = float3(0.40, 0.95, 0.98); coastC = float3(0.30, 0.80, 0.86); grid = float3(0.6, 0.65, 0.7); gridA = 0.09; riverC = float3(0.16, 0.42, 0.48); glowC = float3(0.45, 1.0, 1.0); scan = 0.07;
         cv = float2(0.40, 0.30);
+    }
+    else if (style < 2.5 && hasData)
+    {
+        // Peoples of 2240 (0.1.7): each people in its own colour over gentle relief, dark ink borders.
+        float mixed;
+        float2 ll = float2(lon * cos(radians(lat)), lat);
+        float3 pc = peoplesAt(up, dataTexture.Load(int3(int2(clamp(input.uv, 0.0, 0.9999) * float2(dataDims())), 0)).g, (surfaceFlags() & 32u) != 0u, ll, mixed);
+        float rel2 = clamp(0.80 + lumS * 0.9, 0.82, 1.12);
+        S = water ? float3(0.004, 0.009, 0.018) : pc * pc * 0.62 * rel2;
+        lineP = float3(0.03, 0.03, 0.035); lineC = float3(0.004, 0.004, 0.006); coastC = float3(0.30, 0.42, 0.52) * 0.7;
+        grid = float3(0.5, 0.5, 0.5); gridA = 0.0; riverC = float3(0.05, 0.10, 0.16); glowC = float3(1.0, 1.0, 1.0);
+        flat_ = 1.0; pW = 0.55;
+        cv = float2(0.0, 0.0);
     }
     else if (style < 2.5)
     {
@@ -553,7 +626,7 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
         o += lineC * bGlow * smoothstep(0.10, 0.90, ctryN) * (1.0 - ctryE); // soft glow along the frontier
     // Region light (0.1.4): each region's edge glows in its own colour pulled toward the style's
     // line colour, fading inward; a faint animated shimmer runs along it from orbit.
-    if (hasData && !water)
+    if (hasData && !water && !(style > 1.5 && style < 2.5))
     {
         RegionField rf = regionField(input.uv, regionGlowRadius());
         float3 rt = lerp(lineC, regionTint(rf.own) * max(max(lineC.r, lineC.g), lineC.b), 0.55);
