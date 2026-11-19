@@ -44,10 +44,24 @@ float4 fragmentMain(PostOutput input) : SV_Target
     float3 color = lerp(hdr, glow, post.params.w) * post.params.x;
     color = toneMap(color);
 
+    // Colour grade (0.1.5): a gentle filmic S-curve, cool shadows and warm highlights (split
+    // toning), a touch more saturation in the mids. Mild on purpose: the map must keep its colours.
+    float lum = dot(color, float3(0.2126, 0.7152, 0.0722));
+    color = lerp(color, color * color * (3.0 - 2.0 * color), 0.18);
+    float3 shadows = float3(0.97, 0.99, 1.04);
+    float3 highs = float3(1.035, 1.0, 0.955);
+    color *= lerp(shadows, highs, smoothstep(0.15, 0.85, lum));
+    float l2 = dot(color, float3(0.2126, 0.7152, 0.0722));
+    color = lerp(float3(l2, l2, l2), color, 1.0 + 0.08 * (1.0 - abs(l2 * 2.0 - 1.0)));
+    color = saturate(color);
+
     float2 centered = input.uv * 2.0 - 1.0;
     color *= 1.0 - post.params.y * dot(centered, centered) * 0.5;
 
     if (post.params.z > 0.5)
         color = pow(color, float3(1.0 / 2.2));
+    // Fine dither (one display step): removes banding in the dark sky and soft glows.
+    float n = frac(sin(dot(input.clipPosition.xy, float2(12.9898, 78.233))) * 43758.5453);
+    color += (n - 0.5) / 255.0;
     return float4(color, 1.0);
 }

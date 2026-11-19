@@ -516,6 +516,36 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
         S = lerp(S, hu * max(Ls, 0.03) * 1.5, cv.y);
     }
     float3 o = S * lerp(lerp(0.62, 1.0, dayK) * (0.9 + 0.15 * diff), 1.0, flat_);
+    // Map hill shading (0.1.5): cartographers light relief from the north-west, whatever the sun
+    // does, so mountains read on every style.
+    if (!water && (surfaceFlags() & 2u) != 0u)
+    {
+        float3 east = normalize(cross(float3(0.0, 1.0, 0.0), up) + float3(1e-5, 0.0, 0.0));
+        float3 north = cross(up, east);
+        float3 mapL = normalize(up * 1.1 + north * 0.7 - east * 0.7);
+        float hill = dot(vn, mapL) / max(dot(up, mapL), 0.2);
+        o *= lerp(1.0, clamp(hill, 0.55, 1.45), style < 2.5 ? 0.75 : 0.5);
+    }
+    // Sea (0.1.5): a continental shelf from the land nearby (the coverage mips of the surface map),
+    // depth contours like a nautical chart, slow wave texture and light along the coasts.
+    if (water)
+    {
+        float l1 = saturate(baseColorTexture.SampleLevel(input.uv, 3.0).a * 2.0);
+        float l2 = saturate(baseColorTexture.SampleLevel(input.uv, 5.0).a * 2.0);
+        float l3 = saturate(baseColorTexture.SampleLevel(input.uv, 7.0).a * 2.0);
+        float shelf = saturate(l1 * 1.6 + l2 * 0.9 + l3 * 0.5);
+        float3 deep = style < 1.5 ? float3(0.004, 0.010, 0.020) : (style < 2.5 ? float3(0.003, 0.005, 0.011) : float3(0.0, 0.008, 0.026));
+        float3 shallow = style < 1.5 ? float3(0.035, 0.13, 0.16) : (style < 2.5 ? float3(0.010, 0.020, 0.034) : float3(0.03, 0.14, 0.30));
+        float3 sea = lerp(deep, shallow, shelf * shelf);
+        float2 wp = float2(lon * cos(radians(lat)), lat);
+        float waves = hl_fbm(wp * 0.9 + float2(time * 0.012, time * 0.008)) - 0.5;
+        sea *= 1.0 + waves * 0.35;
+        float iso = abs(frac(shelf * 5.0) - 0.5) / max(fwidth(shelf * 5.0), 1e-4);
+        float contour = (1.0 - smoothstep(0.5, 1.5, iso)) * step(0.05, shelf) * (style < 2.5 ? 0.6 : 1.0);
+        sea += coastC * contour * 0.10 * lerp(1.0, 0.45, borderZoom());
+        sea += coastC * pow(saturate(l1), 2.5) * 0.14; // light along the coast
+        o = lerp(o, sea, 0.85);
+    }
     o = lerp(o, riverC, river * 0.85); // rivers, in the style's own colour
     float zP = lerp(0.10, 0.75, smoothstep(0.55, 0.08, camH));
     o = lerp(o, lineP, provE * (1.0 - ctryE) * zP * pW);

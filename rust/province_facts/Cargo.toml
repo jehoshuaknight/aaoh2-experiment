@@ -1,0 +1,12 @@
+[package]
+name = "province_facts"
+version = "0.1.0"
+edition = "2021"
+description = "Bakes per-province facts (area, terrain, climate, rivers, coast, lights, neighbours) for Astra Novum"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+rayon = "1.10"
+
+[profile.release]
+opt-level = 3
