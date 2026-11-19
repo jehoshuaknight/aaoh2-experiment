@@ -501,7 +501,27 @@ float aaOct(float3 up, float f, float fw, float seed)
     return lerp(0.5, ethNoise3(up * (57.29578 * f) + off), k);
 }
 
-float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out float mixed)
+// A people's own noise field on the sphere: blobs a few hundred km across, finer where the view is close,
+// busier in cities. Seeded by the people, so a people's blobs run on across province borders.
+float ethField(float3 up, float fw, float seed, float city)
+{
+    return 0.50 * aaOct(up, 0.22, fw, seed) + 0.30 * aaOct(up, 0.60, fw, seed + 3.1) + 0.20 * aaOct(up, 1.70, fw, seed + 7.3)
+         + (aaOct(up, 4.5, fw, seed + 1.7) - 0.5) * 0.5 * city;
+}
+
+void ethPick(uint g, float sh, float3 up, float fw, float city, float planetSeed,
+             inout float best, inout float second, inout uint gb, inout uint gs)
+{
+    if (sh <= 0.005)
+        return;
+    float sc = 0.33 * log(sh) + 4.5 * (ethField(up, fw, float(g) * 1.37 + planetSeed, city) - 0.5);
+    if (sc > best) { second = best; gs = gb; best = sc; gb = g; }
+    else if (sc > second) { second = sc; gs = g; }
+}
+
+// The colour of the people at a point (display values), and how mixed the place is (0..1).
+// provR / regionG: the engine's province data at this texel (r = province value, g = 128 + region).
+float3 peoplesAt(float3 up, float provR, float regionG, bool earth, float city, float fw, out float mixed)
 {
     mixed = 0.0;
     int r = int(floor(regionG * 255.0 + 0.5)) - 128;
@@ -512,9 +532,12 @@ float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out
     uint s = range.x, e = range.y;
     if (e <= s)
         return float3(0.45, 0.43, 0.40);
+    // Exact province where the engine's province value is the id's low byte; otherwise the nearest
+    // centre (with a wandering split line). A wrong guess about the encoding only means the fallback.
+    uint r8 = uint(floor(provR * 255.0 + 0.5));
+    int exact = -1;
     float d1 = 9.0, d2 = 9.0;
     uint i1 = s, i2 = s;
-    // Province splits inside a region follow a wandering line, not a straight bisector.
     float3 eastV = normalize(cross(float3(0.0, 1.0, 0.0), up) + float3(1e-5, 0.0, 0.0));
     float3 northV = cross(up, eastV);
     float2 wq = float2(aaOct(up, 0.10, fw, 11.0) + 0.5 * aaOct(up, 0.27, fw, 5.0), aaOct(up, 0.10, fw, 23.0) + 0.5 * aaOct(up, 0.27, fw, 9.0)) - 0.75;
@@ -522,6 +545,8 @@ float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out
     for (uint i = s; i < e && i < s + 64u; i++)
     {
         uint a = provinceCentre(i);
+        if (exact < 0 && ((a >> 21) & 255u) == r8)
+            exact = int(i);
         float lat = radians(float(a & 1023u) / 1023.0 * 180.0 - 90.0);
         float lon = radians(float((a >> 10) & 2047u) / 2047.0 * 360.0 - 180.0);
         float3 c = float3(cos(lat) * cos(lon), sin(lat), -cos(lat) * sin(lon));
@@ -529,27 +554,25 @@ float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out
         if (d < d1) { d2 = d1; i2 = i1; d1 = d; i1 = i; }
         else if (d < d2) { d2 = d; i2 = i; }
     }
-    // A ragged edge between the two nearest provinces of the region, never a straight line.
     float edgeN = 0.6 * aaOct(up, 0.35, fw, 3.7) + 0.4 * aaOct(up, 1.0, fw, 8.1);
     float t = (d2 - d1) / max(d2 + d1, 1e-6);
-    uint pi = (e - s > 1u && t < 0.16 * edgeN) ? i2 : i1;
+    uint pi = exact >= 0 ? uint(exact) : ((e - s > 1u && t < 0.16 * edgeN) ? i2 : i1);
     uint3 mx = provinceMix(pi);
-    float s1 = float((mx.y >> 16) & 127u) / 100.0, s2 = float((mx.x >> 18) & 127u) / 100.0, s3 = float((mx.y >> 9) & 127u) / 100.0, s4 = float((mx.z >> 9) & 127u) / 100.0;
-    // Peoples interleave in patches: a coherent noise field picks one by the shares.
-    float seed = float(pi) * 1.731;
-    // Cities (bright night lights) mix finer: a small-scale term grows with the lights.
-    // Patches a few hundred km across (0.3 cycles per degree), finer detail only where the view is
-    // close enough to show it, and finer still in cities.
-    float m = 0.55 * aaOct(up, 0.30, fw, seed) + 0.30 * aaOct(up, 0.85, fw, seed + 3.1) + 0.15 * aaOct(up, 2.4, fw, seed + 7.3)
-            + (aaOct(up, 5.0, fw, seed + 1.7) - 0.5) * 0.35 * city;
-    float u = saturate((m - 0.30) / 0.40);
+    float s1 = float((mx.y >> 16) & 127u) / 100.0, s2 = float((mx.x >> 18) & 127u) / 100.0, s3 = float((mx.y >> 9) & 127u) / 100.0;
+    float s4 = float((mx.z >> 9) & 127u) / 100.0, s5 = float((mx.z >> 25) & 127u) / 100.0;
     uint g1 = mx.x & 511u, g2 = (mx.x >> 9) & 511u, g3 = mx.y & 511u, g4 = mx.z & 511u, g5 = (mx.z >> 16) & 511u;
-    uint g = u < s1 ? g1 : (u < s1 + s2 ? g2 : (u < s1 + s2 + s3 ? g3 : (u < s1 + s2 + s3 + s4 ? g4 : g5)));
-    // Patch edges blend a little, as on a painted ethnographic map.
-    float soft = min(abs(u - s1), abs(u - s1 - s2));
-    uint go = u < s1 ? g2 : g1;
-    float k = 0.35 * (1.0 - smoothstep(0.0, 0.04, soft)) * step(0.001, s2);
-    float3 col = lerp(ethColour(g), ethColour(go), k);
+    // Each people competes with its own noise field, weighted by its share: natural blobs, no rings.
+    float best = -1e9, second = -1e9;
+    uint gb = g1, gs = g1;
+    float ps = earth ? 0.0 : 50.0;
+    ethPick(g1, s1, up, fw, city, ps, best, second, gb, gs);
+    ethPick(g2, s2, up, fw, city, ps, best, second, gb, gs);
+    ethPick(g3, s3, up, fw, city, ps, best, second, gb, gs);
+    ethPick(g4, s4, up, fw, city, ps, best, second, gb, gs);
+    ethPick(g5, s5, up, fw, city, ps, best, second, gb, gs);
+    // Soft edges between neighbouring peoples (half-and-half right on the edge).
+    float k = second > -1e8 ? 0.5 * (1.0 - smoothstep(0.0, 0.22, best - second)) : 0.0;
+    float3 col = lerp(ethColour(gb), ethColour(gs), k);
     mixed = 1.0 - s1;
     return col;
 }
@@ -619,7 +642,11 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
         // The screen footprint in degrees comes from the map uv (no seam jump at the date line).
         float2 duv = fwidth(input.uv) * float2(360.0 * cos(radians(lat)), 180.0);
         float fw = max(max(duv.x, duv.y), 1e-4);
-        float3 pc = peoplesAt(up, dataTexture.Load(int3(int2(clamp(input.uv, 0.0, 0.9999) * float2(dataDims())), 0)).g, (surfaceFlags() & 32u) != 0u, smoothstep(0.05, 0.6, ul), fw, mixed);
+        float4 pdN = dataTexture.Load(int3(int2(clamp(input.uv, 0.0, 0.9999) * float2(dataDims())), 0));
+        float3 pc = peoplesAt(up, pdN.r, pdN.g, (surfaceFlags() & 32u) != 0u, smoothstep(0.05, 0.6, ul), fw, mixed);
+        // Gentler colours: a touch less saturated, so a map of hundreds of peoples stays easy on the eye.
+        float pl = dot(pc, float3(0.299, 0.587, 0.114));
+        pc = lerp(float3(pl, pl, pl), pc, 0.86);
         float rel2 = clamp(0.80 + lumS * 0.9, 0.82, 1.12);
         S = water ? float3(0.004, 0.009, 0.018) : pc * pc * 0.62 * rel2;
         lineP = float3(0.03, 0.03, 0.035); lineC = float3(0.004, 0.004, 0.006); coastC = float3(0.30, 0.42, 0.52) * 0.7;
