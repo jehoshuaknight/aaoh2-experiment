@@ -443,7 +443,7 @@ float3 ethColour(uint g)
 }
 
 // The colour of the people at a point (display values), and how mixed the place is (0..1).
-float3 peoplesAt(float3 up, float regionG, bool earth, float2 ll, out float mixed)
+float3 peoplesAt(float3 up, float regionG, bool earth, float2 ll, float city, out float mixed)
 {
     mixed = 0.0;
     int r = int(floor(regionG * 255.0 + 0.5)) - 128;
@@ -470,14 +470,15 @@ float3 peoplesAt(float3 up, float regionG, bool earth, float2 ll, out float mixe
     float edgeN = hl_fbm(ll * 0.45 + 3.7);
     float t = (d2 - d1) / max(d2 + d1, 1e-6);
     uint pi = (e - s > 1u && t < 0.16 * edgeN) ? i2 : i1;
-    uint2 mx = provinceMix(pi);
-    float s1 = float((mx.y >> 16) & 127u) / 100.0, s2 = float((mx.x >> 18) & 127u) / 100.0;
+    uint3 mx = provinceMix(pi);
+    float s1 = float((mx.y >> 16) & 127u) / 100.0, s2 = float((mx.x >> 18) & 127u) / 100.0, s3 = float((mx.y >> 9) & 127u) / 100.0, s4 = float((mx.z >> 9) & 127u) / 100.0;
     // Peoples interleave in patches: a coherent noise field picks one by the shares.
     float seed = float(pi) * 1.731;
-    float m = hl_fbm(ll * 1.1 + seed) * 0.75 + hl_noise(ll * 4.5 - seed) * 0.25;
+    // Cities (bright night lights) mix finer: a small-scale term grows with the lights.
+    float m = hl_fbm(ll * 1.1 + seed) * 0.75 + hl_noise(ll * 4.5 - seed) * 0.25 + (hl_noise(ll * 14.0 + seed) - 0.5) * 0.45 * city;
     float u = saturate((m - 0.28) / 0.44);
-    uint g1 = mx.x & 511u, g2 = (mx.x >> 9) & 511u, g3 = mx.y & 511u;
-    uint g = u < s1 ? g1 : (u < s1 + s2 ? g2 : g3);
+    uint g1 = mx.x & 511u, g2 = (mx.x >> 9) & 511u, g3 = mx.y & 511u, g4 = mx.z & 511u, g5 = (mx.z >> 16) & 511u;
+    uint g = u < s1 ? g1 : (u < s1 + s2 ? g2 : (u < s1 + s2 + s3 ? g3 : (u < s1 + s2 + s3 + s4 ? g4 : g5)));
     // Patch edges blend a little, as on a painted ethnographic map.
     float soft = min(abs(u - s1), abs(u - s1 - s2));
     uint go = u < s1 ? g2 : g1;
@@ -550,7 +551,7 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
         // Peoples of 2240 (0.1.7): each people in its own colour over gentle relief, dark ink borders.
         float mixed;
         float2 ll = float2(lon * cos(radians(lat)), lat);
-        float3 pc = peoplesAt(up, dataTexture.Load(int3(int2(clamp(input.uv, 0.0, 0.9999) * float2(dataDims())), 0)).g, (surfaceFlags() & 32u) != 0u, ll, mixed);
+        float3 pc = peoplesAt(up, dataTexture.Load(int3(int2(clamp(input.uv, 0.0, 0.9999) * float2(dataDims())), 0)).g, (surfaceFlags() & 32u) != 0u, ll, smoothstep(0.05, 0.6, ul), mixed);
         float rel2 = clamp(0.80 + lumS * 0.9, 0.82, 1.12);
         S = water ? float3(0.004, 0.009, 0.018) : pc * pc * 0.62 * rel2;
         lineP = float3(0.03, 0.03, 0.035); lineC = float3(0.004, 0.004, 0.006); coastC = float3(0.30, 0.42, 0.52) * 0.7;

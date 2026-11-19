@@ -5,7 +5,7 @@ import sys, os, colorsys
 import numpy as np
 from PIL import Image, ImageFilter
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from groups import EARTH, MARS
+from groups import EARTH, MARS, FUSION_PARENTS
 
 SRC, DST = sys.argv[1], sys.argv[2]
 TB = 'bin/game/textures/bodies/'
@@ -19,7 +19,7 @@ FAMILY_HUE = {
  'Sinitic':0,'Tibeto-Burman':280,'Tai':140,'Koreanic':230,'Japonic':335,'Austroasiatic':110,'Austronesian':170,
  'Papuan':85,'Pama-Nyungan':20,'Polynesian':185,'Chadic':45,'Atlantic':60,'Saharan':35,'Volta-Niger':300,
  'Benue-Congo':280,'Kwa':150,'Mande':80,'Gur':105,'Bantu':125,'Nilotic':250,'Cushitic':20,'Afro-American':290,
- 'Eskimo-Aleut':195,'Chukotko-Kamchatkan':205,'Hmong-Mien':60,'Nilo-Saharan':270,'Ubangian':230,'Bantoid':140,'Khoe/Bantu':40,'Songhai':75,'Basque':355,'Ainu':190,'Afro-Indigenous':300,'Mixed':200,'Indo-Aryan/Tibeto-Burman':300,'Indigenous American':100,'Martian':15,
+ 'Eskimo-Aleut':195,'Chukotko-Kamchatkan':205,'Hmong-Mien':60,'Nilo-Saharan':270,'Ubangian':230,'Bantoid':140,'Khoe/Bantu':40,'Songhai':75,'Basque':355,'Ainu':190,'Afro-Indigenous':300,'Mixed':200,'2240 fusion':300,'Indo-Aryan/Tibeto-Burman':300,'Indigenous American':100,'Martian':15,
 }
 
 def group_colors(groups):
@@ -73,6 +73,13 @@ def scores_chunk(P, table, G):
     np.add.at(S, gi, contrib.T)
     return S                                                                  # G, n
 
+def urban_boost(S, groups, dens_flat):
+    # Fusion peoples are city peoples: strong where the night lights are bright, faint in the country.
+    fu = np.array([g[0] in FUSION_PARENTS for g in groups])
+    if fu.any():
+        S[fu] *= (0.45 + 2.2 * dens_flat)[None, :]
+    return S
+
 CH = 32   # rows per chunk
 
 def render(body, groups, density, land_big, height_big, colors, sea_rgb, ids):
@@ -91,12 +98,14 @@ def render(body, groups, density, land_big, height_big, colors, sea_rgb, ids):
     wt = (density + 0.02).ravel()
     for y0 in range(0, GH, CH):
         y1 = min(GH, y0 + CH); n = (y1 - y0) * GW
-        S = scores_chunk(Pw[y0:y1], table, G)
-        L = np.log(S + 1e-6) + mos[np.arange(G) % NF][:, y0:y1].reshape(G, n) * ((np.arange(G) % 3 + 1) / 2.5)[:, None]
+        dch = density[y0:y1].ravel()
+        S = urban_boost(scores_chunk(Pw[y0:y1], table, G), groups, dch)
+        # Cities mix more: the mosaic noise grows with the night lights.
+        L = np.log(S + 1e-6) + mos[np.arange(G) % NF][:, y0:y1].reshape(G, n) * ((np.arange(G) % 3 + 1) / 2.5)[:, None] * (1.0 + 0.9 * dch)[None, :]
         L -= L.max(0); W = np.exp(4.0 * L); W /= W.sum(0)
         rgb[y0:y1] = (W.T @ C).reshape(y1 - y0, GW, 3)
         total[y0:y1] = S.sum(0).reshape(y1 - y0, GW)
-        St = scores_chunk(Pt[y0:y1], table, G)
+        St = urban_boost(scores_chunk(Pt[y0:y1], table, G), groups, dch)
         W2 = St ** 1.5 + 1e-12; W2 /= W2.sum(0)
         idc = ids[y0:y1].ravel(); wc = wt[y0 * GW:y1 * GW]
         for g in range(G):
@@ -197,6 +206,11 @@ def main():
     allg = {}
     for g in EARTH + MARS: allg.setdefault(g[0], g)
     colors = group_colors(list(allg.values()))
+    # A fusion people starts from the blend of its two parents' colours (the contrast pass then keeps it
+    # apart from its neighbours while staying near that hue).
+    for k, (a, b) in FUSION_PARENTS.items():
+        ca, cb = np.array(colors[a]), np.array(colors[b])
+        colors[k] = tuple(np.clip((ca + cb) / 2 * 1.08 + 0.03, 0, 1))
 
     # ---- Earth
     water = load_l(os.path.join(SRC, TB + 'Earth_water.png'), (GW, GH))

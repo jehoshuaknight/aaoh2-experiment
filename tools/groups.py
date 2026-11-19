@@ -201,3 +201,8 @@ MARS = [
 
 from groups_more import EARTH_MORE
 EARTH = EARTH + EARTH_MORE
+
+# 0.1.8: 100 fusion peoples (two parent cultures each), urban and sprinkled worldwide.
+from groups_fusion import FUSION
+EARTH = EARTH + [f[:5] for f in FUSION]
+FUSION_PARENTS = {f[0]: f[5] for f in FUSION}
