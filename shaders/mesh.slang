@@ -676,6 +676,67 @@ float detailNoise(float3 x)
                      lerp(detailHash(i + float3(0, 1, 1)), detailHash(i + float3(1, 1, 1)), f.x), f.y), f.z);
 }
 
+
+// ------------------------------------------------------------------------------------------------
+// Solar system bodies seen as plain globes (0.1.6): living gas giants, crater relief, ice glints,
+// volcanic hot spots, haze rims. A plain globe is a sphere mesh: its normal points from the centre.
+// ------------------------------------------------------------------------------------------------
+bool isGlobe(VertexOutput input)
+{
+    float3 radial = input.worldPosition - draw.model[3].xyz;
+    return dot(normalize(input.worldNormal), normalize(radial)) > 0.995 && draw.params.x < 2.95;
+}
+
+// How banded the map is around this latitude (gas giants, Venus's and Titan's cloud decks): colour
+// changes far more north-south than east-west at a coarse mip.
+float bandedness(float2 uv)
+{
+    float3 c = baseColorTexture.SampleLevel(uv, 5.0).rgb;
+    float h = 0.0, v = 0.0;
+    [unroll] for (int k = 1; k <= 3; k++)
+    {
+        h += length(baseColorTexture.SampleLevel(uv + float2(0.11 * k, 0.0), 5.0).rgb - c);
+        v += length(baseColorTexture.SampleLevel(uv + float2(0.0, 0.012 * k), 5.0).rgb - c);
+    }
+    return smoothstep(1.4, 2.6, v / (h + 0.01));
+}
+
+// Gas giant weather: zonal bands sway east and west at alternating speeds (a slow oscillation, so the
+// map never smears), and the clouds boil gently along them.
+float2 giantFlow(float2 uv, float banded, float time)
+{
+    float lat = (0.5 - uv.y) * 3.14159265;
+    float jets = sin(lat * 14.0) * 0.6 + sin(lat * 31.0 + 1.3) * 0.4;
+    float sway = jets * 0.010 * sin(time * 0.011 + lat * 3.0);
+    float2 p = float2(uv.x * 40.0, uv.y * 20.0);
+    float boil = (hl_fbm(p + float2(time * 0.010, 0.0)) - 0.5) * 0.0025;
+    float boil2 = (hl_fbm(p * 2.3 - float2(0.0, time * 0.013)) - 0.5) * 0.0012;
+    return uv + float2(sway + boil, boil2) * banded;
+}
+
+// The map's whole-planet colour (the top mip): rims and haze take it.
+float3 globeAverage()
+{
+    return baseColorTexture.SampleLevel(float2(0.5, 0.5), 12.0).rgb;
+}
+
+// Relief from the map's own shading: a bump from its brightness slope, strongest where the
+// terminator rakes across craters and ridges.
+float3 globeBump(float2 uv, float3 n)
+{
+    uint w, h, mips;
+    baseColorTexture.GetDimensions(0, w, h, mips);
+    float2 d = float2(1.5 / float(w), 1.5 / float(h));
+    float3 lw = float3(0.299, 0.587, 0.114);
+    float l0 = dot(baseColorTexture.SampleLevel(uv, 0.0).rgb, lw);
+    float lx = dot(baseColorTexture.SampleLevel(uv + float2(d.x, 0.0), 0.0).rgb, lw);
+    float ly = dot(baseColorTexture.SampleLevel(uv + float2(0.0, d.y), 0.0).rgb, lw);
+    float3 east = normalize(cross(float3(0.0, 1.0, 0.0), n) + float3(1e-5, 0.0, 0.0));
+    float3 north = cross(n, east);
+    float k = 2.2;
+    return normalize(n - (east * (lx - l0) - north * (ly - l0)) * k);
+}
+
 [shader("fragment")]
 float4 fragmentLit(VertexOutput input) : SV_Target
 {
@@ -689,13 +750,33 @@ float4 fragmentLit(VertexOutput input) : SV_Target
         float mu = saturate(dot(n, normalize(frame.cameraPosition.xyz - input.worldPosition)));
         float limb = 1.0 - 0.62 * (1.0 - mu) - 0.12 * (1.0 - mu * mu);
         float3 tint = draw.baseColor.rgb * lerp(float3(1.0, 0.72, 0.5), float3(1.0, 1.0, 1.0), sqrt(mu));
-        return float4(tint * texel.rgb * limb * 2.2, 1.0);
+        // 0.1.6: a boiling photosphere. Granules (small, fast), supergranules (large, slow), a few
+        // sunspots with penumbrae, and bright faculae toward the limb.
+        float t = frame.misc.y;
+        float gran = detailNoise(n * 180.0 + float3(t * 0.15, -t * 0.11, t * 0.07)) * 0.6
+                   + detailNoise(n * 420.0 - float3(t * 0.21, t * 0.17, 0.0)) * 0.4;
+        float sup = detailNoise(n * 22.0 + t * 0.01);
+        float spotN = detailNoise(n * 9.0 + float3(3.1, 7.7, 1.3) + t * 0.002);
+        float umbra = smoothstep(0.80, 0.86, spotN) * smoothstep(0.55, 0.0, abs(n.y) - 0.1);
+        float penumbra = smoothstep(0.74, 0.80, spotN) * smoothstep(0.55, 0.0, abs(n.y) - 0.1);
+        float fac = smoothstep(0.62, 0.75, detailNoise(n * 40.0 + 11.0)) * pow(1.0 - mu, 2.0);
+        float surf = (0.86 + 0.22 * gran) * (0.94 + 0.12 * sup);
+        surf *= 1.0 - 0.45 * penumbra - 0.45 * umbra;
+        surf += fac * 0.35;
+        return float4(tint * texel.rgb * limb * 2.2 * surf, 1.0);
     }
     uint flags = surfaceFlags();
     bool surface = draw.params.z > 0.5;
     // Planet surfaces in one of the Helios map styles are shaded entirely by the style.
     if (surface && frame.misc.z > 0.5)
         return float4(heliosStyledSurface(input, texel, frame.misc.z), 1.0);
+
+    // Plain globes in the system view (0.1.6).
+    bool globe = !surface && isGlobe(input);
+    bool airyGlobe = globe && draw.params.y > 1.5;
+    float banded = globe ? bandedness(input.uv) : 0.0;
+    if (globe && banded > 0.0)
+        texel = baseColorTexture.Sample(giantFlow(input.uv, banded, frame.misc.y));
 
     float3 toSun = lightDirection(input.worldPosition);
     float3 toCamera = normalize(frame.cameraPosition.xyz - input.worldPosition);
@@ -756,6 +837,9 @@ float4 fragmentLit(VertexOutput input) : SV_Target
             normal = normalize(normal - (tA * (hx - h0) + tB * (hy - h0)) * 2.2 * bumpK);
         }
     }
+    // Crater and ridge relief on airless globes (0.1.6), raking at the terminator.
+    if (globe && !airyGlobe && banded < 0.5)
+        normal = globeBump(input.uv, normal);
     float nDotL = saturate(dot(normal, toSun));
 
     float3 albedo = draw.baseColor.rgb * input.color.rgb * texel.rgb;
@@ -822,6 +906,41 @@ float4 fragmentLit(VertexOutput input) : SV_Target
     float3 sky = airy ? airMultiple(1.0002, airUp) * AIR_PI * 3.0 : float3(0.0, 0.0, 0.0);
     float3 color = albedo * (frame.ambient.rgb + frame.sunColor.rgb * (sunAir * nDotL * visibility * terminator * shade + sky));
     color += albedo * draw.params.x;
+
+    if (globe)
+    {
+        float3 gn = normalize(input.worldNormal);
+        float mu = saturate(dot(gn, toCamera));
+        float sunG = dot(gn, toSun);
+        float3 avg = globeAverage();
+        float t = frame.misc.y;
+        if (banded > 0.3 || airyGlobe)
+        {
+            // Gas giants and hazy worlds: limb darkening, and a haze rim lit by the sun.
+            color *= lerp(1.0, pow(max(mu, 0.02), 0.32), max(banded, 0.5));
+            float rim = pow(1.0 - mu, 3.5) * smoothstep(-0.25, 0.35, sunG);
+            float3 haze = lerp(avg, float3(dot(avg, float3(0.333, 0.333, 0.333)), dot(avg, float3(0.333, 0.333, 0.333)), dot(avg, float3(0.333, 0.333, 0.333))), -0.4);
+            color += saturate(haze) * frame.sunColor.rgb * rim * 0.55;
+        }
+        else
+        {
+            // Ice: bright, pale ground glints (Europa, Enceladus, Triton's caps).
+            float lum = dot(albedo, float3(0.3, 0.59, 0.11));
+            float sat = max(albedo.r, max(albedo.g, albedo.b)) - min(albedo.r, min(albedo.g, albedo.b));
+            float ice = smoothstep(0.35, 0.7, lum) * (1.0 - smoothstep(0.08, 0.25, sat));
+            float3 hv = normalize(toSun + toCamera);
+            color += frame.sunColor.rgb * (pow(saturate(dot(normal, hv)), 70.0) * 0.20 + pow(1.0 - mu, 4.0) * 0.03) * ice * step(0.0, sunG);
+            // Io: dark volcanic paterae on sulphur-yellow ground glow on the night side and flicker.
+            float3 wide = baseColorTexture.SampleLevel(input.uv, 5.0).rgb;
+            float sulphur = smoothstep(0.15, 0.30, wide.r - wide.b) * smoothstep(0.08, 0.18, wide.g - wide.b * 1.2);
+            float wl = dot(wide, float3(0.3, 0.59, 0.11));
+            float tl = dot(texel.rgb, float3(0.3, 0.59, 0.11));
+            float dark = smoothstep(0.30, 0.12, tl) * smoothstep(0.75, 0.5, tl / max(wl, 0.02)); // small spots, darker than around
+            float night = 1.0 - smoothstep(-0.1, 0.1, sunG);
+            float flicker = 0.75 + 0.25 * sin(t * 2.3 + input.uv.x * 400.0) * sin(t * 1.7 + input.uv.y * 300.0);
+            color += float3(1.0, 0.36, 0.08) * sulphur * dark * (0.4 + 0.6 * night) * flicker * 0.35;
+        }
+    }
 
     // Planet surfaces carry a mask in the texture's alpha channel:
     // below 0.5 is water, 0.5..1 is land with city-light brightness.
