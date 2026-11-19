@@ -451,7 +451,57 @@ float3 ethColour(uint g)
 }
 
 // The colour of the people at a point (display values), and how mixed the place is (0..1).
-float3 peoplesAt(float3 up, float regionG, bool earth, float2 ll, float city, out float mixed)
+// One octave of value noise at f cycles per degree, faded to its mean where a cycle gets smaller than
+// about two pixels (fw = degrees per pixel), so far zooms never alias into streaks.
+// Integer lattice hash (no sin(): its precision loss draws stripes along 127x + 311y = const).
+float ethHash(int2 c)
+{
+    uint2 q = uint2(c + int2(1 << 20, 1 << 20));
+    uint h = q.x * 1597334677u ^ q.y * 3812015801u;
+    h = (h ^ (h >> 16)) * 2246822519u;
+    h = (h ^ (h >> 13)) * 3266489917u;
+    h ^= h >> 16;
+    return float(h & 0xFFFFFFu) / 16777216.0;
+}
+float ethNoise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = p - i;
+    f = f * f * (3.0 - 2.0 * f);
+    int2 c = int2(i);
+    return lerp(lerp(ethHash(c), ethHash(c + int2(1, 0)), f.x), lerp(ethHash(c + int2(0, 1)), ethHash(c + int2(1, 1)), f.x), f.y);
+}
+float ethHash3(int3 c)
+{
+    uint3 q = uint3(c + int3(1 << 20, 1 << 20, 1 << 20));
+    uint h = q.x * 1597334677u ^ q.y * 3812015801u ^ q.z * 2654435769u;
+    h = (h ^ (h >> 16)) * 2246822519u;
+    h = (h ^ (h >> 13)) * 3266489917u;
+    h ^= h >> 16;
+    return float(h & 0xFFFFFFu) / 16777216.0;
+}
+float ethNoise3(float3 p)
+{
+    float3 i = floor(p);
+    float3 f = p - i;
+    f = f * f * (3.0 - 2.0 * f);
+    int3 c = int3(i);
+    float x00 = lerp(ethHash3(c), ethHash3(c + int3(1, 0, 0)), f.x);
+    float x10 = lerp(ethHash3(c + int3(0, 1, 0)), ethHash3(c + int3(1, 1, 0)), f.x);
+    float x01 = lerp(ethHash3(c + int3(0, 0, 1)), ethHash3(c + int3(1, 0, 1)), f.x);
+    float x11 = lerp(ethHash3(c + int3(0, 1, 1)), ethHash3(c + int3(1, 1, 1)), f.x);
+    return lerp(lerp(x00, x10, f.y), lerp(x01, x11, f.y), f.z);
+}
+// One octave of noise on the sphere (no stretching at any latitude or longitude) at f cycles per
+// degree, faded to its mean where a cycle shrinks below about two pixels (fw = degrees per pixel).
+float aaOct(float3 up, float f, float fw, float seed)
+{
+    float k = saturate(1.0 - (fw * f - 0.2) / 0.3);
+    float3 off = float3(frac(seed * 0.618), frac(seed * 0.377), frac(seed * 0.271)) * 97.0;
+    return lerp(0.5, ethNoise3(up * (57.29578 * f) + off), k);
+}
+
+float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out float mixed)
 {
     mixed = 0.0;
     int r = int(floor(regionG * 255.0 + 0.5)) - 128;
@@ -464,18 +514,23 @@ float3 peoplesAt(float3 up, float regionG, bool earth, float2 ll, float city, ou
         return float3(0.45, 0.43, 0.40);
     float d1 = 9.0, d2 = 9.0;
     uint i1 = s, i2 = s;
+    // Province splits inside a region follow a wandering line, not a straight bisector.
+    float3 eastV = normalize(cross(float3(0.0, 1.0, 0.0), up) + float3(1e-5, 0.0, 0.0));
+    float3 northV = cross(up, eastV);
+    float2 wq = float2(aaOct(up, 0.10, fw, 11.0) + 0.5 * aaOct(up, 0.27, fw, 5.0), aaOct(up, 0.10, fw, 23.0) + 0.5 * aaOct(up, 0.27, fw, 9.0)) - 0.75;
+    float3 upW = normalize(up + (eastV * wq.x + northV * wq.y) * 0.09);
     for (uint i = s; i < e && i < s + 64u; i++)
     {
         uint a = provinceCentre(i);
         float lat = radians(float(a & 1023u) / 1023.0 * 180.0 - 90.0);
         float lon = radians(float((a >> 10) & 2047u) / 2047.0 * 360.0 - 180.0);
         float3 c = float3(cos(lat) * cos(lon), sin(lat), -cos(lat) * sin(lon));
-        float d = 1.0 - dot(up, c);
+        float d = 1.0 - dot(upW, c);
         if (d < d1) { d2 = d1; i2 = i1; d1 = d; i1 = i; }
         else if (d < d2) { d2 = d; i2 = i; }
     }
     // A ragged edge between the two nearest provinces of the region, never a straight line.
-    float edgeN = hl_fbm(ll * 0.45 + 3.7);
+    float edgeN = 0.6 * aaOct(up, 0.35, fw, 3.7) + 0.4 * aaOct(up, 1.0, fw, 8.1);
     float t = (d2 - d1) / max(d2 + d1, 1e-6);
     uint pi = (e - s > 1u && t < 0.16 * edgeN) ? i2 : i1;
     uint3 mx = provinceMix(pi);
@@ -483,8 +538,11 @@ float3 peoplesAt(float3 up, float regionG, bool earth, float2 ll, float city, ou
     // Peoples interleave in patches: a coherent noise field picks one by the shares.
     float seed = float(pi) * 1.731;
     // Cities (bright night lights) mix finer: a small-scale term grows with the lights.
-    float m = hl_fbm(ll * 1.1 + seed) * 0.75 + hl_noise(ll * 4.5 - seed) * 0.25 + (hl_noise(ll * 14.0 + seed) - 0.5) * 0.45 * city;
-    float u = saturate((m - 0.28) / 0.44);
+    // Patches a few hundred km across (0.3 cycles per degree), finer detail only where the view is
+    // close enough to show it, and finer still in cities.
+    float m = 0.55 * aaOct(up, 0.30, fw, seed) + 0.30 * aaOct(up, 0.85, fw, seed + 3.1) + 0.15 * aaOct(up, 2.4, fw, seed + 7.3)
+            + (aaOct(up, 5.0, fw, seed + 1.7) - 0.5) * 0.35 * city;
+    float u = saturate((m - 0.30) / 0.40);
     uint g1 = mx.x & 511u, g2 = (mx.x >> 9) & 511u, g3 = mx.y & 511u, g4 = mx.z & 511u, g5 = (mx.z >> 16) & 511u;
     uint g = u < s1 ? g1 : (u < s1 + s2 ? g2 : (u < s1 + s2 + s3 ? g3 : (u < s1 + s2 + s3 + s4 ? g4 : g5)));
     // Patch edges blend a little, as on a painted ethnographic map.
@@ -558,8 +616,10 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
     {
         // Peoples of 2240 (0.1.7): each people in its own colour over gentle relief, dark ink borders.
         float mixed;
-        float2 ll = float2(lon * cos(radians(lat)), lat);
-        float3 pc = peoplesAt(up, dataTexture.Load(int3(int2(clamp(input.uv, 0.0, 0.9999) * float2(dataDims())), 0)).g, (surfaceFlags() & 32u) != 0u, ll, smoothstep(0.05, 0.6, ul), mixed);
+        // The screen footprint in degrees comes from the map uv (no seam jump at the date line).
+        float2 duv = fwidth(input.uv) * float2(360.0 * cos(radians(lat)), 180.0);
+        float fw = max(max(duv.x, duv.y), 1e-4);
+        float3 pc = peoplesAt(up, dataTexture.Load(int3(int2(clamp(input.uv, 0.0, 0.9999) * float2(dataDims())), 0)).g, (surfaceFlags() & 32u) != 0u, smoothstep(0.05, 0.6, ul), fw, mixed);
         float rel2 = clamp(0.80 + lumS * 0.9, 0.82, 1.12);
         S = water ? float3(0.004, 0.009, 0.018) : pc * pc * 0.62 * rel2;
         lineP = float3(0.03, 0.03, 0.035); lineC = float3(0.004, 0.004, 0.006); coastC = float3(0.30, 0.42, 0.52) * 0.7;
