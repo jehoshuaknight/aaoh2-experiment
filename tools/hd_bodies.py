@@ -171,6 +171,10 @@ def main():
         elif colour == 'game' or img.mode == 'L':
             img = colour_from_game(img, opath, valid)
         rgb = grade(np.asarray(img.convert('RGB')), sat=0.75 if name == 'Triton' else 1.12).astype(np.float32)
+        if name == 'Triton':
+            # Voyager 2's colour leans green; Triton is pale pinkish grey with a peach-white south cap.
+            l = (rgb * [0.299, 0.587, 0.114]).sum(-1, keepdims=True)
+            rgb = l * np.array([1.06, 0.98, 0.95]) * 0.6 + rgb * 0.4
         # Fill what the probe never saw from the game's original map, feathered.
         if (valid < 0.99).any():
             old = np.asarray(Image.open(opath).convert('RGB').resize((W, H), Image.BICUBIC), np.float32)
@@ -179,7 +183,9 @@ def main():
                 ol = (old * [0.299, 0.587, 0.114]).sum(-1, keepdims=True)
                 vm = valid > 0.99
                 mc = rgb[vm].mean(0); ml = float((mc * [0.299, 0.587, 0.114]).sum())
-                old = ol / max(float(ol.mean()), 1) * mc * (ml / max(ml, 1))
+                if name == 'Triton':
+                    mc = ml * np.array([1.04, 0.97, 0.96])
+                old = ol / max(float(ol.mean()), 1) * mc
             a = np.asarray(Image.fromarray((np.clip(valid, 0, 1) * 255).astype(np.uint8)).filter(ImageFilter.MinFilter(5)).filter(ImageFilter.GaussianBlur(W / 400)), np.float32)[..., None] / 255
             # match the old map's brightness to the new one along the seam
             band = (a[..., 0] > 0.2) & (a[..., 0] < 0.8)
