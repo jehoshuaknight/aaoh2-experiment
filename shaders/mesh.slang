@@ -776,7 +776,13 @@ float4 fragmentLit(VertexOutput input) : SV_Target
     bool airyGlobe = globe && draw.params.y > 1.5;
     float banded = globe ? bandedness(input.uv) : 0.0;
     if (globe && banded > 0.0)
-        texel = baseColorTexture.Sample(giantFlow(input.uv, banded, frame.misc.y));
+    {
+        // Wrap in longitude by hand (the sampler may clamp) and keep the unshifted derivatives,
+        // so the seam picks no wrong mip level.
+        float2 fuv = giantFlow(input.uv, banded, frame.misc.y);
+        fuv = float2(frac(fuv.x), clamp(fuv.y, 0.0, 1.0));
+        texel = baseColorTexture.SampleGrad(fuv, ddx(input.uv), ddy(input.uv));
+    }
 
     float3 toSun = lightDirection(input.worldPosition);
     float3 toCamera = normalize(frame.cameraPosition.xyz - input.worldPosition);

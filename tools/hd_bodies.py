@@ -14,7 +14,14 @@ Image.MAX_IMAGE_PIXELS = None
 
 BODIES, DL, ORIG = sys.argv[1], sys.argv[2], sys.argv[3]
 ONLY = set(sys.argv[4:])
-ALIGN = {'Io', 'Europa', 'Ganymede', 'Callisto', 'Enceladus', 'Pluto', 'Charon', 'Phobos'}
+ALIGN = {'Io', 'Europa', 'Ganymede', 'Callisto', 'Enceladus', 'Phobos'}
+# Known layouts (USGS 0..360 products), set by landmarks: Pluto's Sputnik Planitia at 175E, Ceres's Occator at 239E.
+ROLL = {'Pluto': 180, 'Charon': 180, 'Ceres': 180}
+# New Horizons colour (enhanced-colour releases, toned down): Pluto dark red-brown to cream; Charon grey, red north cap.
+PALETTE = {
+ 'pluto': [(0.0, (0.09, 0.05, 0.035)), (0.22, (0.30, 0.15, 0.08)), (0.45, (0.62, 0.43, 0.29)), (0.7, (0.86, 0.75, 0.60)), (1.0, (0.98, 0.95, 0.90))],
+ 'charon': [(0.0, (0.10, 0.095, 0.09)), (0.5, (0.50, 0.48, 0.46)), (1.0, (0.86, 0.85, 0.83))],
+}
 S3 = 'https://asc-pds-services.s3.us-west-2.amazonaws.com/mosaic/'
 SSS = 'https://www.solarsystemscope.com/textures/download/'
 
@@ -33,9 +40,9 @@ SPEC = {
  'Callisto': (S3 + 'Callisto_Voyager_GalileoSSI_global_mosaic_1km.tif', 4096, 'game', -180),
  'Enceladus': (S3 + 'Enceladus_Cassini_mosaic_global_110m.tif', 2048, 'game', -180),
  'Titan':    (S3 + 'Titan_ISS_P19658_Mosaic_Global_4km.tif', 2048, 'game', -180),
- 'Triton':   (S3 + 'Triton_Voyager2_ClrMosaic_GlobalFill_600m.tif', 2048, 'own', -180),
- 'Pluto':    (S3 + 'Pluto_NewHorizons_Global_Mosaic_300m_Jul2017_8bit.tif', 2048, 'game', -180),
- 'Charon':   (S3 + 'Charon_NewHorizons_Global_Mosaic_300m_Jul2017_8bit.tif', 2048, 'game', -180),
+ 'Triton':   (S3 + 'Triton_Voyager2_ClrMosaic_GlobalFill_600m.tif', 2048, 'own', -180),   # colour kept, desaturated; fill tinted
+ 'Pluto':    (S3 + 'Pluto_NewHorizons_Global_Mosaic_300m_Jul2017_8bit.tif', 2048, 'pluto', 0),    # 0..360 source
+ 'Charon':   (S3 + 'Charon_NewHorizons_Global_Mosaic_300m_Jul2017_8bit.tif', 2048, 'charon', 0),  # 0..360 source
  'Ceres':    (S3 + 'Ceres_Dawn_FC_DLR_global_20ppd_Oct2015.tif', 2048, 'game', -180),
  'Phobos':   (S3 + 'Phobos_ME_SRC_Mosaic_Global_16ppd.tif', 2048, 'game', -180),
 }
@@ -96,6 +103,21 @@ def colour_from_game(grey, game_path, valid):
     g = g / max(float(g[m].mean()) if m.any() else g.mean(), 1e-3) * float(ol[..., 0][m].mean() if m.any() else ol.mean())
     return Image.fromarray((np.clip(g[..., None] * tint, 0, 1) * 255).astype(np.uint8))
 
+def palette(img, valid, which, opath):
+    W, H = img.size
+    g = np.asarray(img.convert('L'), np.float32) / 255
+    m = valid > 0.99
+    lo, hi = np.percentile(g[m], (1, 99)) if m.any() else (0, 1)
+    t = np.clip((g - lo) / max(hi - lo, 1e-3), 0, 1)
+    stops = PALETTE[which]
+    xs = [s[0] for s in stops]
+    rgb = np.stack([np.interp(t, xs, [s[1][c] for s in stops]) for c in range(3)], -1)
+    if which == 'charon':
+        lat = 90 - (np.arange(H) + 0.5) / H * 180
+        cap = np.clip((lat - 55) / 20, 0, 1)[:, None, None]   # Mordor Macula
+        rgb = rgb * (1 + cap * (np.array([0.25, -0.12, -0.28])))
+    return Image.fromarray((np.clip(rgb, 0, 1) * 255).astype(np.uint8))
+
 def best_shift(img, valid, opath):
     W, H = img.size
     w, h = 512, 256
@@ -141,12 +163,23 @@ def main():
             if shift:
                 img = Image.fromarray(np.roll(np.asarray(img), shift, 1)); valid = np.roll(valid, shift, 1)
                 print(f'{name}: aligned by {shift * 360 / W:.0f} deg', flush=True)
-        if colour == 'game' or img.mode == 'L':
+        if name in ROLL:
+            sh = int(round(ROLL[name] / 360 * W))
+            img = Image.fromarray(np.roll(np.asarray(img), sh, 1)); valid = np.roll(valid, sh, 1)
+        if colour in PALETTE:
+            img = palette(img, valid, colour, opath)
+        elif colour == 'game' or img.mode == 'L':
             img = colour_from_game(img, opath, valid)
-        rgb = grade(np.asarray(img.convert('RGB'))).astype(np.float32)
+        rgb = grade(np.asarray(img.convert('RGB')), sat=0.75 if name == 'Triton' else 1.12).astype(np.float32)
         # Fill what the probe never saw from the game's original map, feathered.
         if (valid < 0.99).any():
             old = np.asarray(Image.open(opath).convert('RGB').resize((W, H), Image.BICUBIC), np.float32)
+            if colour in PALETTE or name == 'Triton':
+                # the fill keeps the old map's texture, in the new map's colour
+                ol = (old * [0.299, 0.587, 0.114]).sum(-1, keepdims=True)
+                vm = valid > 0.99
+                mc = rgb[vm].mean(0); ml = float((mc * [0.299, 0.587, 0.114]).sum())
+                old = ol / max(float(ol.mean()), 1) * mc * (ml / max(ml, 1))
             a = np.asarray(Image.fromarray((np.clip(valid, 0, 1) * 255).astype(np.uint8)).filter(ImageFilter.MinFilter(5)).filter(ImageFilter.GaussianBlur(W / 400)), np.float32)[..., None] / 255
             # match the old map's brightness to the new one along the seam
             band = (a[..., 0] > 0.2) & (a[..., 0] < 0.8)
