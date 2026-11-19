@@ -1,24 +1,24 @@
 # Ethnicity in 2240: data and gameplay spec
 
-The 0.1.2 build ships the ethnicity **data**. The current `astra_client.exe` does not read it yet.
+The 0.1.3 build ships the ethnicity **data**. The current `astra_client.exe` does not read it yet.
 The map mode and the effects below have to be added in the engine source (`engine/`), which is not in this repository.
 
 ## Files (in `bin/game/`)
 
 | File | What |
 |---|---|
-| `data/ethnicity/groups.tsv` | 160 groups: key, name, language family, map colour, bodies (Earth/Mars), homeland and 2240 notes. 153 on Earth, 7 Martian-born, 11 Earth groups also present on Mars. |
+| `data/ethnicity/groups.tsv` | 259 groups: key, name, language family, map colour, bodies (Earth/Mars), homeland and 2240 notes. 252 on Earth (100 added in 0.1.3), 7 Martian-born, 11 Earth groups also present on Mars. |
 | `data/earth/ethnicity.tsv` | For each of Earth's 480 provinces: `group:percent;...` (top groups, the remainder is `other`). |
 | `data/mars/ethnicity.tsv` | The same for Mars's 200 provinces. |
-| `textures/bodies/Earth_ethnicity.png`, `Mars_ethnicity.png` | 2048 x 1024 equirectangular maps, drawn like the ecology map: no borders, soft blends, brighter where more people live. |
+| `textures/bodies/Earth_ethnicity.png`, `Mars_ethnicity.png` | 2048 x 1024 equirectangular maps, drawn like the ecology map: no borders, brighter where more people live. Mixed zones break into interleaved patches like a real ethnographic map; neighbouring groups get contrasting colours near their language family's hue. |
 
-The files are built by `tools/build_ethnicity.py` (group placements in `tools/groups.py`). To change a group, edit its seeds and rebuild.
+The files are built by `tools/build_ethnicity.py` (group placements in `tools/groups.py` and `tools/groups_more.py`). To change a group, edit its seeds and rebuild.
 The Siberian lights and cities come from `tools/siberia_lights.py`.
 
 ## How the 2240 projection was made
 
 - Real groups sit at their real homelands; there is no real ethnic dataset in it (the GREG/Atlas Narodov Mira files could not be downloaded), so placements are hand-made and approximate.
-- 2240 changes: the +70 m sea removes drowned populations (Bengal delta, West Siberian lowland, Gulf coasts, Netherlands polders); a 3 C warmer climate pulls people north. Siberia gains Central Asian, Chinese and Korean communities and a new hybrid group, the **Sibiryaks**. Canada's thawed north gets the **Reachers**, Antarctica the **Austral settlers**, and ice-free Greenland Scandinavian settlers. Maghrebi communities grow in southern Europe.
+- 2240 changes: the +70 m sea removes drowned populations (Bengal delta, West Siberian lowland, Gulf coasts, Netherlands polders); a 3 C warmer climate pulls people north. Siberia gains Central Asian, Chinese and Korean communities and a new hybrid group, the **Sibiryaks**. Canada's thawed north gets the **Reachers**, Antarctica the **Austral settlers**, ice-free Greenland the **New Greenlanders**, and the drowned lowlands leave the **Ob Sea exiles** and the **Delta diaspora**. Maghrebi communities grow in southern Europe.
 - Mars: seven Martian-born identities (Tharsians, Mariners, Arabians, Hellasians, Elysians, Boreal coasters, Southern highlanders) dominate after 54 years of war-time nationalism. Earth-origin minorities remain from the settlement waves (Han, Hindustani, Anglo-American, Russian, Japanese, Korean, Brazilian, Yoruba, Levantine, German, Mexican).
 
 ## Engine work needed
