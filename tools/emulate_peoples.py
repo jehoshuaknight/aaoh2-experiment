@@ -23,7 +23,11 @@ def n3(p):
 def aao(up,f,fw,seed):
     seed=np.asarray(seed,float); off=np.stack([np.mod(seed*0.618,1),np.mod(seed*0.377,1),np.mod(seed*0.271,1)],-1)*97.0
     k=np.clip(1-(fw*f-0.2)/0.3,0,1); return 0.5+(n3(up*(57.29578*f)+off)-0.5)*k
-def field(up,fw,seed): return 0.5*aao(up,0.22,fw,seed)+0.3*aao(up,0.6,fw,seed+3.1)+0.2*aao(up,1.7,fw,seed+7.3)
+def field(up,fw,seed):
+    seed=np.asarray(seed,float)
+    w=np.stack([aao(up,0.12,fw,seed+21),aao(up,0.12,fw,seed+34),aao(up,0.12,fw,seed+55)],-1)-0.5
+    q=up+w*0.16; q/=np.linalg.norm(q,axis=-1,keepdims=True)
+    return 0.46*aao(q,0.22,fw,seed)+0.27*aao(q,0.6,fw,seed+3.1)+0.17*aao(q,1.7,fw,seed+7.3)+0.10*aao(q,4.6,fw,seed+9.9)
 def tsv(p):
     for l in open(p,encoding='utf-8'):
         if l.startswith('#') or not l.strip(): continue
@@ -50,10 +54,11 @@ def render(lon0,lon1,lat1,lat0,fw,name):
         best=np.where(m1,sc,best); gb=np.where(m1,g,gb)
     k=np.where(second>-1e8,0.5*(1-np.clip((best-second)/0.22,0,1)**2*(3-2*np.clip((best-second)/0.22,0,1))),0)
     col=cols[gb]*(1-k[...,None])+cols[gs]*k[...,None]
+    gap=best-second; ink=np.where(second>-1e8,(1-np.clip(gap/0.05,0,1))*(1-np.clip((fw-0.03)/0.09,0,1)),0); col=col*(1-0.28*ink)[...,None]
     l=(col*[0.299,0.587,0.114]).sum(-1,keepdims=True); col=l+(col-l)*0.86
     shade=np.clip(0.80+sat[py,px]*0.9,0.82,1.12)[...,None]; out=col*shade
     R_=np.where(water,-1,np.array([reg.get(int(p),-1) for p in pid.ravel()]).reshape(pid.shape))
     def edge(a): return (a!=np.roll(a,1,1))|(a!=np.roll(a,1,0))
     pe=edge(np.where(water,-1,pid))&~water; out[pe]*=0.6; out[edge(R_)&~water]=0.04; out[water]=[0.02,0.04,0.07]
     Image.fromarray((np.clip(out,0,1)*255).astype(np.uint8)).resize((900,int(900*LAT.shape[0]/LAT.shape[1]))).save(S+f'/work/{name}.png')
-render(50,150,75,30,0.15,'siberia_new'); render(-12,45,62,33,0.07,'europe_close'); render(-125,-65,52,24,0.08,'usa_close')
+render(50,150,75,30,0.15,'siberia_new'); render(-12,45,62,33,0.07,'europe_close'); render(-125,-65,52,24,0.08,'usa_close'); render(-5,20,55,42,0.02,'europe_zoom')

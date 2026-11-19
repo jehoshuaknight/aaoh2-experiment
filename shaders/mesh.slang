@@ -505,8 +505,13 @@ float aaOct(float3 up, float f, float fw, float seed)
 // busier in cities. Seeded by the people, so a people's blobs run on across province borders.
 float ethField(float3 up, float fw, float seed, float city)
 {
-    return 0.50 * aaOct(up, 0.22, fw, seed) + 0.30 * aaOct(up, 0.60, fw, seed + 3.1) + 0.20 * aaOct(up, 1.70, fw, seed + 7.3)
-         + (aaOct(up, 4.5, fw, seed + 1.7) - 0.5) * 0.5 * city;
+    // Domain warp: the sample point drifts along a slow vector field, so blobs curl and finger into each
+    // other like real settlement patterns instead of round spots.
+    float3 w = float3(aaOct(up, 0.12, fw, seed + 21.0), aaOct(up, 0.12, fw, seed + 34.0), aaOct(up, 0.12, fw, seed + 55.0)) - 0.5;
+    float3 q = normalize(up + w * 0.16);
+    return 0.46 * aaOct(q, 0.22, fw, seed) + 0.27 * aaOct(q, 0.60, fw, seed + 3.1) + 0.17 * aaOct(q, 1.70, fw, seed + 7.3)
+         + 0.10 * aaOct(q, 4.6, fw, seed + 9.9)                       // fine fringes, only when zoomed in
+         + (aaOct(q, 4.5, fw, seed + 1.7) - 0.5) * 0.5 * city;
 }
 
 void ethPick(uint g, float sh, float3 up, float fw, float city, float planetSeed,
@@ -570,9 +575,13 @@ float3 peoplesAt(float3 up, float provR, float regionG, bool earth, float city, 
     ethPick(g3, s3, up, fw, city, ps, best, second, gb, gs);
     ethPick(g4, s4, up, fw, city, ps, best, second, gb, gs);
     ethPick(g5, s5, up, fw, city, ps, best, second, gb, gs);
-    // Soft edges between neighbouring peoples (half-and-half right on the edge).
-    float k = second > -1e8 ? 0.5 * (1.0 - smoothstep(0.0, 0.22, best - second)) : 0.0;
+    // Soft edges between neighbouring peoples (half-and-half right on the edge), and up close a thin
+    // painted outline where two peoples meet, like the ink line of a hand-drawn ethnographic map.
+    float gap = best - second;
+    float k = second > -1e8 ? 0.5 * (1.0 - smoothstep(0.0, 0.22, gap)) : 0.0;
     float3 col = lerp(ethColour(gb), ethColour(gs), k);
+    float ink = second > -1e8 ? (1.0 - smoothstep(0.0, 0.05, gap)) * (1.0 - smoothstep(0.03, 0.12, fw)) : 0.0;
+    col *= 1.0 - 0.28 * ink;
     mixed = 1.0 - s1;
     return col;
 }
