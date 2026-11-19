@@ -202,6 +202,14 @@ float sunVisibility(float3 worldPosition, float3 normal, float nDotL)
 // 2 = relief map, 4 = cloud map, 8 = flat (an equirectangular map laid out on a plane).
 // ------------------------------------------------------------------------------------------------
 
+// 0.1.9: F6 order is Realistic, Peoples of 2240, Strategic, Holo Table. The engine still counts
+// 1 = (old) Strategic slot, 2 = (old) Satellite Night slot; the labels were swapped in the .exe, so
+// the shader swaps the looks to match.
+float mapStyle(float s)
+{
+    return s > 0.5 && s < 1.5 ? 2.0 : (s > 1.5 && s < 2.5 ? 1.0 : s);
+}
+
 uint surfaceFlags()
 {
     return draw.params.z > 0.5 ? uint(draw.params.z + 0.5) - 1u : 0u;
@@ -843,7 +851,7 @@ float4 fragmentLit(VertexOutput input) : SV_Target
     bool surface = draw.params.z > 0.5;
     // Planet surfaces in one of the Helios map styles are shaded entirely by the style.
     if (surface && frame.misc.z > 0.5)
-        return float4(heliosStyledSurface(input, texel, frame.misc.z), 1.0);
+        return float4(heliosStyledSurface(input, texel, mapStyle(frame.misc.z)), 1.0);
 
     // Plain globes in the system view (0.1.6).
     bool globe = !surface && isGlobe(input);
@@ -1199,7 +1207,7 @@ float4 flatClouds(VertexOutput input)
         discard;
     float3 c = cc * ac / max(A, 1e-4);
     // Map styles tint the clouds too.
-    float style = frame.misc.z;
+    float style = mapStyle(frame.misc.z);
     if (style > 0.5)
     {
         float4 ctint = style < 1.5 ? float4(0.55, 0.66, 0.70, 0.55) : style < 2.5 ? float4(0.22, 0.25, 0.32, 0.55) : float4(0.40, 0.70, 1.00, 0.35);
@@ -1307,7 +1315,7 @@ float4 fragmentVolumetricClouds(VertexOutput input) : SV_Target
     float tinted = saturate(dot(abs(draw.baseColor.rgb - 1.0), float3(1.0, 1.0, 1.0)) * 4.0);
     c = lerp(c, dot(c, float3(0.30, 0.59, 0.11)) * draw.baseColor.rgb * 1.08, tinted);
     // Map styles tint and thin the clouds (Helios GlobeStyle.CLOUD: Strategic, Satellite Night, Holo Table).
-    float style = frame.misc.z;
+    float style = mapStyle(frame.misc.z);
     if (style > 0.5)
     {
         float4 ctint = style < 1.5 ? float4(0.55, 0.66, 0.70, 0.55) : style < 2.5 ? float4(0.22, 0.25, 0.32, 0.55) : float4(0.40, 0.70, 1.00, 0.35);
