@@ -354,6 +354,79 @@ ProvinceEdges provinceEdges(float2 uv)
     return e;
 }
 
+// ------------------------------------------------------------------------------------------------
+// Border look (0.1.4): the HOI4 ink hierarchy (hairline provinces, bold regions, heaviest frontier)
+// with Stellaris-style light: every region glows in its own colour along its edge, fading inward,
+// so neighbouring regions meet as two bands of colour with a dark line between them.
+// ------------------------------------------------------------------------------------------------
+
+// How far out the camera is: 0 close to the ground, 1 seeing the whole globe.
+float borderZoom()
+{
+    return smoothstep(0.08, 0.9, abs(draw.extra.w));
+}
+
+// A region's own colour from its id (g = (128 + region) / 255 on land): muted for fills,
+// vivid for the light along its edges.
+float3 regionHue(float g)
+{
+    float id = floor(g * 255.0 + 0.5) - 128.0;
+    float h = frac(id * 0.61803398875 + 0.07);
+    return saturate(abs(frac(h + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0);
+}
+float3 regionTint(float g) { return lerp(float3(0.55, 0.55, 0.55), regionHue(g), 0.62); }
+float3 regionVivid(float g) { return lerp(float3(0.5, 0.5, 0.5), regionHue(g), 0.92); }
+
+struct RegionField
+{
+    float own;       // the region under this point (g channel of the nearest texel)
+    float glow;      // share of the nearby ground that is another region: 0 inside, about 0.5 on the border
+    float provGlow;  // the same for the province, narrower
+};
+
+// A soft distance to the nearest other region: 16 taps on a golden-angle spiral, weighted toward
+// the centre, wrapping around the map in longitude. Cheap (16 loads) and free of the banding a
+// ring search gives.
+RegionField regionField(float2 uv, float radiusTexels)
+{
+    uint w, h;
+    dataTexture.GetDimensions(w, h);
+    float2 p = uv * float2(w, h) - 0.5;
+    int2 c = int2(floor(p + 0.5));
+    c.x = (c.x % int(w) + int(w)) % int(w);
+    c.y = clamp(c.y, 0, int(h) - 1);
+    float4 t0 = dataTexture.Load(int3(c, 0));
+    RegionField f;
+    f.own = t0.g;
+    float differ = 0.0, pdiffer = 0.0, total = 0.0, ptotal = 0.0;
+    [unroll]
+    for (int k = 0; k < 16; k++)
+    {
+        float a = float(k) * 2.39996323;
+        float r = radiusTexels * sqrt((float(k) + 0.5) / 16.0);
+        int2 q = int2(floor(p + float2(cos(a), sin(a)) * r + 0.5));
+        q.x = (q.x % int(w) + int(w)) % int(w);
+        q.y = clamp(q.y, 0, int(h) - 1);
+        float4 t = dataTexture.Load(int3(q, 0));
+        float wt = 1.0 - r / (radiusTexels + 1.0);
+        bool land = t.g > 0.5;
+        differ += (land && abs(t.g - t0.g) > 0.002) ? wt : 0.0;
+        total += wt;
+        float pw = r < radiusTexels * 0.45 ? wt : 0.0;
+        pdiffer += (land && abs(t.r - t0.r) > 0.002) ? pw : 0.0;
+        ptotal += pw;
+    }
+    f.glow = t0.g > 0.5 ? differ / max(total, 1e-4) : 0.0;
+    f.provGlow = t0.g > 0.5 ? saturate(pdiffer / max(ptotal, 1e-4) * 2.0) : 0.0;
+    return f;
+}
+
+// Glow width in texels of the province data: wide from orbit, narrow close in.
+float regionGlowRadius()
+{
+    return lerp(3.0, 10.0, borderZoom());
+}
+
 // Helios's map styles for a planet surface, from GlobeTerrain's globe shader (u_style branches).
 // style 1 = Strategic, 2 = Satellite Night, 3 = Holo Table.
 float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
@@ -448,6 +521,17 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
     o = lerp(o, lineP, provE * (1.0 - ctryE) * zP * pW);
     if (bGlow > 0.0 && !water)
         o += lineC * bGlow * smoothstep(0.10, 0.90, ctryN) * (1.0 - ctryE); // soft glow along the frontier
+    // Region light (0.1.4): each region's edge glows in its own colour pulled toward the style's
+    // line colour, fading inward; a faint animated shimmer runs along it from orbit.
+    if (hasData && !water)
+    {
+        RegionField rf = regionField(input.uv, regionGlowRadius());
+        float3 rt = lerp(lineC, regionTint(rf.own) * max(max(lineC.r, lineC.g), lineC.b), 0.55);
+        float shimmer = 0.85 + 0.15 * sin(time * 1.3 + (lon + lat) * 0.35);
+        float g = pow(saturate(rf.glow * 3.0), 1.3) * (1.0 - ctryE);
+        o += rt * g * (style < 2.5 ? 0.55 : 0.70) * lerp(0.6, 1.0, borderZoom()) * shimmer;
+        o += lineP * rf.provGlow * 0.10 * zP * pW * (1.0 - ctryE);
+    }
     o = lerp(o, coastE > 0.5 ? coastC : lineC, ctryE * (coastE > 0.5 ? 0.7 : 0.9));
     float2 gl = float2(lon, lat) / 15.0;
     float2 gd = abs(frac(gl + 0.5) - 0.5) / max(fwidth(gl), float2(1e-4, 1e-4));
@@ -481,6 +565,8 @@ float3 heliosRealisticPaint(float3 albedo, float4 texel, float4 pd, float sunP)
     float3 ink = lerp(float3(dot(lc, lw), dot(lc, lw), dot(lc, lw)), lc, 0.65);
     ink = lerp(ink, ink / max(max(ink.r, max(ink.g, ink.b)), 0.2) * 0.60, 0.7);
     ink *= 0.85 + 0.30 * saturate((pd.a - 0.25) / 0.75); // a shade per province
+    // Regions read as a political map: each takes a light tint of its own colour (0.1.4).
+    ink = lerp(ink, ink * (regionTint(pd.g) * 1.35), 0.22);
     // Helios paints the owner's colour at the land's own brightness (relief kept). Here the paint
     // is held at the brightness of the ground under it, so the world stays photographic.
     float ground = dot(col, lw);
@@ -507,7 +593,25 @@ float3 heliosRealisticLines(float3 lit, float4 texel, float4 pd, float nightK, f
     lit += myC * 0.004 * nightK * ovK * owned;
     lit += float3(0.010, 0.016, 0.020) * provE * (1.0 - ctryE) * nightK * 0.35 * lerp(0.3, 1.0, smoothstep(0.60, 0.08, camH));
     lit += myC * 0.02 * ctryN * owned * (1.0 - ctryE) * nightK * ovK;
-    float bk = coastLine >= edges.region ? 0.3 : 0.82; // coasts lighter than region borders
+    // Region light (0.1.4): a band of the region's own colour along its edge, fading inward, painted
+    // at the ground's brightness by day and glowing faintly by night; a bright rim just inside the
+    // dark border line, so two neighbours meet as two coloured bands with ink between.
+    if (!water && pd.g > 0.5)
+    {
+        RegionField rf = regionField(uv, regionGlowRadius());
+        float3 rt = regionVivid(rf.own);
+        float zoom = borderZoom();
+        float band = saturate(rf.glow * 3.2) * (1.0 - edges.region);
+        float rim = smoothstep(0.24, 0.46, rf.glow) * (1.0 - edges.region);
+        float bright = max(dot(lit, float3(0.299, 0.587, 0.114)), 0.0005);
+        float3 paint = rt / max(dot(rt, float3(0.299, 0.587, 0.114)), 0.05) * min(bright, 0.35);
+        lit = lerp(lit, paint * 1.3, band * lerp(0.40, 0.65, zoom) * (1.0 - nightK * 0.5));
+        lit = lerp(lit, paint * 1.7, rim * lerp(0.30, 0.55, zoom) * (1.0 - nightK * 0.5));
+        lit += rt * (band * 0.010 + rim * 0.020) * nightK * lerp(0.6, 1.0, zoom);
+        // Province edges get a whisper of the same light from up close (HOI4's light province grid).
+        lit = lerp(lit, paint * 1.15, rf.provGlow * 0.12 * (1.0 - zoom) * (1.0 - ctryE));
+    }
+    float bk = coastLine >= edges.region ? 0.3 : 0.88; // coasts lighter than region borders
     float3 bc = lerp(float3(0.0002, 0.0002, 0.0003), float3(0.31, 0.38, 0.42) * 0.25, nightK);
     lit = lerp(lit, bc, ctryE * lerp(bk, 0.75, nightK));
     return lit;
