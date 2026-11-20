@@ -185,6 +185,11 @@ MARS = [
  ("m_elysian","Elysians","Martian","Elysium and Aeolis",[(20,145,2.2,16),(-5,140,1.5,12)]),
  ("m_boreal","Boreal coasters","Martian","Shores of the northern sea: fishing, kelp and shipping towns",[(45,-90,1.3,18),(45,40,1.3,18),(45,160,1.2,18),(60,-20,0.9,16)]),
  ("m_austral","Southern highlanders","Martian","Cimmeria, Sirenum, Aonia: thin, cold farm country",[(-35,-150,1.6,18),(-40,170,1.4,16),(-55,-60,1.1,16)]),
+ # 0.1.25: four more Martian peoples, so Mars is not one Tharsian block
+ ("m_olympian","Olympians","Martian","Olympus Mons and Amazonis: cliff-foot towns and the high spaceports on the great volcano",[(18,-134,2.6,9),(10,-150,1.4,8)]),
+ ("m_utopian","Utopians","Martian","Utopia Planitia: the plain of the first northern farms, now a coast of the new sea",[(40,112,4.2,11),(30,122,2.2,8),(48,100,1.6,7)]),
+ ("m_argyrian","Argyrians","Martian","Argyre basin: the walled lake country of the south",[(-50,-43,2.6,9),(-42,-30,1.2,7)]),
+ ("m_isidian","Isidians","Martian","Isidis and Syrtis Major: the dark-sand plains between the old highlands and the sea",[(12,88,2.4,9),(8,70,1.3,8)]),
  # Earth-origin communities on Mars (by settlement wave)
  ("hannorth","Northern Han","Sinitic","Mars: first-wave Chinese agency crews",[(5,-120,1.8,4.8),(-10,-75,1.3,3.6)]),
  ("hindustani","Hindustanis (Hindi-Urdu)","Indo-Aryan","Mars: second-wave labour settlers",[(15,15,1.8,5.4),(-35,75,1.3,4.8)]),

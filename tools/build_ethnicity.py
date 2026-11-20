@@ -39,7 +39,8 @@ def group_colors(groups):
     return cols
 
 MARTIAN = {'m_tharsian': '#b9564a', 'm_marineris': '#4f9aa6', 'm_arabian': '#c09048', 'm_hellasian': '#7d64b0',
-           'm_elysian': '#6aa06a', 'm_boreal': '#5674b0', 'm_austral': '#a9a46c'}
+           'm_elysian': '#6aa06a', 'm_boreal': '#5674b0', 'm_austral': '#a9a46c',
+           'm_olympian': '#d07a3a', 'm_utopian': '#58b090', 'm_argyrian': '#8aa0d8', 'm_isidian': '#a05a8a'}
 
 def unit(lat, lon):
     la, lo = np.radians(lat), np.radians(lon)

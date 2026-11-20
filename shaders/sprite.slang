@@ -19,6 +19,7 @@ struct SpriteOutput
     float shape;
     float3 world;        // 0.1.24: where on the sprite this is, for nebula and territory texture
     float time;          // frame time, passed on so the fragment stage needs no frame uniform
+    float2 ecliptic;     // 0.1.25: the orbital plane's direction across the screen (sprite space)
 };
 
 static const float2 corners[6] = {
@@ -49,6 +50,10 @@ SpriteOutput vertexMain(SpriteInput input)
     output.shape = input.params.x;
     output.world = world;
     output.time = frame.misc.y;
+    float3 toSprite = normalize(input.positionSize.xyz - frame.cameraPosition.xyz + float3(1e-6, 0.0, 0.0));
+    float3 lineDir = cross(float3(0.0, 1.0, 0.0), toSprite);
+    float2 ec = float2(dot(lineDir, axisX), dot(lineDir, axisY));
+    output.ecliptic = length(ec) > 1e-4 ? normalize(ec) : float2(1.0, 0.0);
     return output;
 }
 
@@ -137,6 +142,14 @@ float4 fragmentMain(SpriteOutput input) : SV_Target
         float rays = pow(abs(cos(a * 3.0 + 0.4)), 60.0) + pow(abs(cos(a * 3.0 + 1.45)), 60.0) * 0.6;
         glow += rays * exp(-r * 4.0) * 0.25;
         float3 c = core * disc * input.color.rgb + input.color.rgb * float3(1.0, 0.86, 0.62) * glow * (1.0 - disc);
+        // 0.1.25: a lens streak, a faint halo ring, and the zodiacal light along the planets' plane.
+        float2 lp = input.local;
+        float streak = exp(-abs(lp.y) * 55.0) * exp(-abs(lp.x) * 2.2) * 0.35;
+        float ring = exp(-pow((r - 0.62) / 0.025, 2.0)) * 0.05;
+        float3 ringC = lerp(float3(1.0, 0.6, 0.4), float3(0.5, 0.7, 1.0), saturate((r - 0.6) * 25.0 + 0.5));
+        float along = dot(lp, input.ecliptic), across = dot(lp, float2(-input.ecliptic.y, input.ecliptic.x));
+        float zodi = exp(-pow(across / (0.05 + 0.10 * abs(along)), 2.0)) * exp(-abs(along) * 2.5) * smoothstep(0.2, 0.35, r) * 0.18;
+        c += input.color.rgb * (float3(1.0, 0.9, 0.75) * streak + ringC * ring + float3(1.0, 0.92, 0.8) * zodi);
         float edgeFade = 1.0 - smoothstep(0.85, 1.0, r);
         return float4(c * edgeFade * input.color.a, 1.0);
     }

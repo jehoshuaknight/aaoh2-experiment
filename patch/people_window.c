@@ -29,7 +29,9 @@ static char *image_base(void)
 }
 
 /* state kept between frames */
-static struct { uint32_t prov; uint32_t tab; uint32_t closed; uint32_t page; } st = { 0xFFFFFFFFu, 0, 0, 0 };
+/* mode 0: the selected province's peoples; 1: the A to Z list of all peoples; 2: one people from the list */
+static struct { uint32_t prov; uint32_t tab; uint32_t closed; uint32_t page; uint32_t mode; uint32_t person; uint32_t lpage; uint32_t pad; }
+    st = { 0xFFFFFFFFu, 0, 0, 0, 0, 0, 0, 0 };
 
 static uint32_t slen(const char *s) { uint32_t n = 0; while (s[n]) n++; return n; }
 /* length of b if the title a starts with the whole name b (followed by its end or a non-letter), else 0 */
@@ -99,6 +101,43 @@ static void row(TextFn t, void *ui, float x, float *y, float w, const char *labe
     *y = wrap(t, ui, x + cw * 11.0f, *y, w - cw * 11.0f, val, cv, lh, ymax, cw);
 }
 
+
+static const char *lit(const char *p) { __asm__("" : "+r"(p)); return p; }   /* no absolute pointers in data */
+
+static int btn(ButtonFn button, void *ui, float x, float y, float w, float h, const char *label)
+{
+    Rect b = { x, y, w, h };
+    SV s = { slen(label), label };
+    return button(ui, &b, &s, 0) != 0;
+}
+
+/* one people's record: facts and the paged written history, from y down to ymax */
+static void record(TextFn t, ButtonFn button, void *ui, const PwPeople *G, float x, float y, float w, float ymax,
+                   float lh, float cw, float *col_text, float *col_dim)
+{
+    row(t, ui, x, &y, w, "Family", str(G->family), col_dim, col_text, lh, ymax, cw);
+    row(t, ui, x, &y, w, "Language", str(G->language), col_dim, col_text, lh, ymax, cw);
+    row(t, ui, x, &y, w, "Faith", str(G->faith), col_dim, col_text, lh, ymax, cw);
+    row(t, ui, x, &y, w, "Number", str(G->number), col_dim, col_text, lh, ymax, cw);
+    row(t, ui, x, &y, w, "From", str(G->parents), col_dim, col_text, lh, ymax, cw);
+    row(t, ui, x, &y, w, "Heartland", str(G->strongholds), col_dim, col_text, lh, ymax, cw);
+    y += lh * 0.5f;
+    float bh = lh + 4.0f, ytext = ymax - bh - 6.0f;
+    uint32_t per_page = (uint32_t)((ytext - y) / lh); if (per_page < 3) per_page = 3;
+    int more = 0;
+    wrapx(t, ui, x, y, w, str(G->description), col_text, lh, ytext, cw, st.page * per_page, &more);
+    if (more || st.page > 0) {
+        char lab[24]; uint32_t n = 0; uint32_t pg = st.page + 1;
+        const char *pl = lit("Page "); for (uint32_t i = 0; pl[i]; i++) lab[n++] = pl[i];
+        if (pg >= 10) lab[n++] = (char)('0' + pg / 10 % 10);
+        lab[n++] = (char)('0' + pg % 10);
+        text(t, ui, x + w * 0.5f - cw * 3.5f, ytext + 8.0f, lab, n, col_dim);
+        float bw = cw * 9.0f;
+        if (st.page > 0 && btn(button, ui, x, ytext + 4.0f, bw, bh, lit("< Prev"))) st.page--;
+        if (more && btn(button, ui, x + w - bw, ytext + 4.0f, bw, bh, lit("Next >"))) st.page++;
+    }
+}
+
 __attribute__((used)) void pw_hook(void *ui, void *view, char *L, void *r9)
 {
     char *B = image_base();
@@ -127,15 +166,15 @@ __attribute__((used)) void pw_hook(void *ui, void *view, char *L, void *r9)
         }
     }
     if (prov == 0xFFFFFFFFu) return;
-    if (prov != st.prov) { st.prov = prov; st.tab = 0; st.closed = 0; st.page = 0; }
+    if (prov != st.prov) { st.prov = prov; st.tab = 0; st.closed = 0; st.page = 0; st.mode = 0; }
     if (st.closed) return;
 
     PanelFn panel = (PanelFn)(B + RVA_PANEL);
     ButtonFn button = (ButtonFn)(B + RVA_BUTTON);
     TextFn t = (TextFn)(B + RVA_TEXT);
+    FillFn fill = (FillFn)(B + RVA_FILL);
     float *col_text = (float *)((char *)ui + 0x84);
     float *col_dim = (float *)((char *)ui + 0x74);
-    float *col_hi = (float *)((char *)ui + 0xb4);
     float cw = *(float *)ui, ch = *(float *)((char *)ui + 4);
     if (cw < 4.0f || cw > 40.0f) cw = 8.0f;
     if (ch < 8.0f || ch > 60.0f) ch = 14.0f;
@@ -150,28 +189,65 @@ __attribute__((used)) void pw_hook(void *ui, void *view, char *L, void *r9)
     const PwProv *P = &PW_PROV[prov];
     uint32_t ntab = 0;
     for (uint32_t k = 0; k < 3; k++) if (P->who[k] != 0xFFFF) ntab = k + 1;
-    if (ntab == 0) return;
+    if (ntab == 0 && st.mode == 0) st.mode = 1;
     if (st.tab >= ntab) st.tab = 0;
-    const PwPeople *G = &PW_PEOPLE[P->who[st.tab]];
 
+    const PwPeople *G = st.mode == 1 ? 0 : &PW_PEOPLE[st.mode == 2 ? st.person : P->who[st.tab]];
     Rect r = { px, py, pw, ph }, c;
-    SV title = { slen(str(G->name)), str(G->name) };
+    const char *ttl = G ? str(G->name) : lit("Peoples of 2240, A to Z");
+    SV title = { slen(ttl), ttl };
     panel(&c, ui, &r, &title);
-
-    /* close button, like the province panel's */
-    Rect xb = { px + pw - 22.0f, py + 3.0f, 18.0f, 18.0f };
-    const char *xl = "x";
-    __asm__("" : "+r"(xl));   /* keep the address computed (no absolute pointer in data) */
-    SV xs = { 1, xl };
-    if (button(ui, &xb, &xs, 0)) { st.closed = 1; return; }
-    FillFn fill = (FillFn)(B + RVA_FILL);
+    if (btn(button, ui, px + pw - 22.0f, py + 3.0f, 18.0f, 18.0f, lit("x"))) { st.closed = 1; return; }
+    if (st.mode != 1 && btn(button, ui, px + pw - 22.0f - 8.0f - cw * 6.0f, py + 3.0f, cw * 6.0f, 18.0f, lit("A-Z")))
+        { st.mode = 1; st.page = 0; return; }
     float accent[4];
-    colour_of(G->colour, 1.0f, accent);
+    colour_of(G ? G->colour : 0x8aa0b8u, 1.0f, accent);
     Rect bar = { c.x, c.y - 3.0f, c.w, 3.0f };                /* accent line in the people's colour */
     fill(ui, &bar, accent);
 
     float x = c.x + 4.0f, y = c.y + 2.0f, w = c.w - 8.0f, ymax = c.y + c.h - 4.0f;
-    text(t, ui, x, y, "Peoples of ", 11, col_dim);
+    float bh = lh + 4.0f;
+
+    if (st.mode == 1) {
+        /* every people, A to Z, two columns, a page at a time; click one to read about it */
+        float colw = (w - 8.0f) * 0.5f;
+        uint32_t rows = (uint32_t)((ymax - y - bh - 10.0f) / (bh + 3.0f)); if (rows < 2) rows = 2;
+        uint32_t per = rows * 2, pages = (PW_NPEOPLE + per - 1) / per;
+        if (st.lpage >= pages) st.lpage = pages - 1;
+        for (uint32_t k = 0; k < per; k++) {
+            uint32_t i = st.lpage * per + k;
+            if (i >= PW_NPEOPLE) break;
+            const PwPeople *Q = &PW_PEOPLE[PW_ORDER[i]];
+            float bx = x + (k >= rows ? colw + 8.0f : 0.0f), by = y + (float)(k % rows) * (bh + 3.0f);
+            char lab[64]; uint32_t n = 0;
+            lab[n++] = ' '; lab[n++] = ' ';
+            const char *nm = str(Q->shortname);
+            uint32_t maxc = (uint32_t)(colw / cw) - 1; if (maxc > 60) maxc = 60;
+            for (uint32_t j = 0; nm[j] && n < maxc; j++) lab[n++] = nm[j];
+            Rect b = { bx, by, colw, bh };
+            SV sv = { n, lab };
+            if (button(ui, &b, &sv, 0)) { st.mode = 2; st.person = PW_ORDER[i]; st.page = 0; }
+            float sw[4]; colour_of(Q->colour, 1.0f, sw);
+            Rect sq = { bx + 5.0f, by + (bh - 10.0f) * 0.5f, 10.0f, 10.0f };
+            fill(ui, &sq, sw);
+        }
+        float yb = ymax - bh;
+        float bw = cw * 9.0f;
+        if (st.lpage > 0 && btn(button, ui, x, yb, bw, bh, lit("< Prev"))) st.lpage--;
+        if (st.lpage + 1 < pages && btn(button, ui, x + w - bw, yb, bw, bh, lit("Next >"))) st.lpage++;
+        if (ntab > 0 && btn(button, ui, x + w * 0.5f - cw * 7.0f, yb, cw * 14.0f, bh, lit("This province"))) { st.mode = 0; st.page = 0; }
+        return;
+    }
+
+    if (st.mode == 2) {
+        if (btn(button, ui, x, y, cw * 16.0f, bh, lit("< All peoples"))) { st.mode = 1; return; }
+        if (ntab > 0 && btn(button, ui, x + w - cw * 14.0f, y, cw * 14.0f, bh, lit("This province"))) { st.mode = 0; st.page = 0; return; }
+        y += bh + 10.0f;
+        record(t, button, ui, G, x, y, w, ymax, lh, cw, col_text, col_dim);
+        return;
+    }
+
+    text(t, ui, x, y, lit("Peoples of "), 11, col_dim);
     text(t, ui, x + cw * 11.0f, y, pname, (uint32_t)plen, col_text);
     y += lh + 2.0f;
 
@@ -192,7 +268,7 @@ __attribute__((used)) void pw_hook(void *ui, void *view, char *L, void *r9)
         for (uint32_t i = 0; nm[i] && i < room; i++) lab[n++] = nm[i];
         lab[n++] = ' ';
         for (uint32_t i = 0; i < pn; i++) lab[n++] = pct[i];
-        Rect b = { x + (tw + 8.0f) * (float)k, y, tw, lh + 4.0f };
+        Rect b = { x + (tw + 8.0f) * (float)k, y, tw, bh };
         SV s = { n, lab };
         if (button(ui, &b, &s, 0) && st.tab != k) { st.tab = k; st.page = 0; }
         float sw[4];
@@ -201,36 +277,5 @@ __attribute__((used)) void pw_hook(void *ui, void *view, char *L, void *r9)
         fill(ui, &sq, sw);
     }
     y += lh + 12.0f;
-
-    row(t, ui, x, &y, w, "Family", str(G->family), col_dim, col_text, lh, ymax, cw);
-    row(t, ui, x, &y, w, "Language", str(G->language), col_dim, col_text, lh, ymax, cw);
-    row(t, ui, x, &y, w, "Faith", str(G->faith), col_dim, col_text, lh, ymax, cw);
-    row(t, ui, x, &y, w, "Number", str(G->number), col_dim, col_text, lh, ymax, cw);
-    row(t, ui, x, &y, w, "From", str(G->parents), col_dim, col_text, lh, ymax, cw);
-    row(t, ui, x, &y, w, "Heartland", str(G->strongholds), col_dim, col_text, lh, ymax, cw);
-    y += lh * 0.5f;
-    /* the written history, a page at a time when it is longer than the window */
-    float bh = lh + 4.0f, ytext = ymax - bh - 6.0f;
-    uint32_t per_page = (uint32_t)((ytext - y) / lh); if (per_page < 3) per_page = 3;
-    int more = 0;
-    wrapx(t, ui, x, y, w, str(G->description), col_text, lh, ytext, cw, st.page * per_page, &more);
-    if (more || st.page > 0) {
-        char lab[24]; uint32_t n = 0; uint32_t pg = st.page + 1;
-        const char *pl = "Page "; for (uint32_t i = 0; pl[i]; i++) lab[n++] = pl[i];
-        if (pg >= 10) lab[n++] = (char)('0' + pg / 10 % 10);
-        lab[n++] = (char)('0' + pg % 10);
-        text(t, ui, x + w * 0.5f - cw * 3.5f, ytext + 8.0f, lab, n, col_dim);
-        float bw = cw * 9.0f;
-        if (st.page > 0) {
-            const char *pv = "< Prev"; __asm__("" : "+r"(pv));
-            Rect b = { x, ytext + 4.0f, bw, bh }; SV sv = { 6, pv };
-            if (button(ui, &b, &sv, 0)) st.page--;
-        }
-        if (more) {
-            const char *nx = "Next >"; __asm__("" : "+r"(nx));
-            Rect b = { x + w - bw, ytext + 4.0f, bw, bh }; SV sv = { 6, nx };
-            if (button(ui, &b, &sv, 0)) st.page++;
-        }
-    }
-    (void)col_hi;
+    record(t, button, ui, G, x, y, w, ymax, lh, cw, col_text, col_dim);
 }

@@ -174,7 +174,8 @@ from peoples_lore_4 import LORE as _L4
 from peoples_lore_5 import LORE as _L5
 from peoples_lore_6 import LORE as _L6
 from peoples_lore_7 import LORE as _L7
-LORE = {**_L1, **_L2, **_L3, **_L4, **_L5, **_L6, **_L7}
+from peoples_lore_8 import LORE as _L8
+LORE = {**_L1, **_L2, **_L3, **_L4, **_L5, **_L6, **_L7, **_L8}
 
 MARS_LORE = {
  'm_tharsian': ('The Tharsians are the people of the great volcanic bulge, where the first domes went up under Arsia and Pavonis in the 2060s and the independence movement was born.',
@@ -189,6 +190,14 @@ MARS_LORE = {
                'They run the foundries and reactors of the north, love music played in the vast lava-tube halls, and quarrel cheerfully with the Tharsians over who founded Mars.'),
  'm_marineris': ('The Mariners are the people of Valles Marineris, the great canyon, whose cliff towns hang on walls seven kilometres high.',
                  'They climb, fly gliders on the canyon winds, and keep the most mixed culture on Mars, a crossroads of every settler line.'),
+ 'm_olympian': ('The Olympians live around Olympus Mons, the highest mountain in the solar system, where the cliff-foot towns grew up beneath its six-kilometre scarp and launch rails run up its slopes to thin air.',
+                'They are pilots, launch crews and cliff builders, proud that every ship leaving Mars passes over their heads, and they hold the Ascent, a race up the volcano, every Martian year.'),
+ 'm_utopian': ('The Utopians farm Utopia Planitia, the great northern plain where the first open-field crops of Mars were sown under pressure tents; when the northern sea began to fill, their fields became a coast.',
+               'They are careful farmers and ferry sailors, keep tea houses and harvest festivals from their Japanese and Korean grandparents, and plant a tree for every child born.'),
+ 'm_argyrian': ('The Argyrians live in the walled Argyre basin, where meltwater from the southern ice was pooled into the first lake of Mars, ringed by terraced towns.',
+                'They fish and sail on their lake, build in white stone cut from the basin rim, and sing in Portuguese-flavoured Martian at the lake festivals of the long southern summer.'),
+ 'm_isidian': ('The Isidians settled the Isidis basin and the dark sands of Syrtis Major, a later wave from South Asia and the Middle East who came to work the mines and the solar fields.',
+               'Their bazaars, spice gardens under glass and colourful festivals of lights and lanterns make Isidis the liveliest region of Mars, and their creole is the trade language of the eastern hemisphere.'),
  'm_austral': ('The Southern highlanders live on the old, cold cratered south of Mars, the last region settled, among ice miners and observatories.',
                'They are hardy, solitary and famously hospitable to travellers caught by dust storms, and keep the longest memory of the dead in every family.'),
 }

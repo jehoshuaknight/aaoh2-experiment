@@ -200,6 +200,10 @@ INFO = {
  'm_elysian': ('Elysian (Japanese and Korean roots)', 'Secular, Shinto-Buddhist'),
  'm_boreal': ('Boreal Coast speech', 'Secular, sea cults'),
  'm_austral': ('Southern Highland speech (Russian and English roots)', 'Orthodox, secular'),
+ 'm_olympian': ('Tharsian Creole, Olympus dialect (English and Spanish roots)', 'Secular Martian civic faith, Catholic'),
+ 'm_utopian': ('Utopian speech (Japanese, Korean and English roots)', 'Secular, Buddhist, Shinto'),
+ 'm_argyrian': ('Argyrian (Portuguese and English roots)', 'Catholic, secular'),
+ 'm_isidian': ('Isidian Creole (Hindi, Arabic and English roots)', 'Hindu, Muslim, secular'),
 }
 
 from groups_500 import INFO_500

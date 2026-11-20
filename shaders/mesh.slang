@@ -744,6 +744,20 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
         pc = lerp(float3(pl, pl, pl), pc, 0.86);
         float rel2 = clamp(0.80 + lumS * 0.9, 0.82, 1.12);
         S = water ? float3(0.004, 0.009, 0.018) : pc * pc * 0.62 * rel2;
+        if (!water)
+        {
+            // Atlas look (0.1.25), as you zoom in: paper grain, and mixed-population zones hatched
+            // with fine diagonal lines, the way printed ethnographic maps show them.
+            float zin = 1.0 - smoothstep(0.03, 0.10, fw);
+            float grain = detailNoise(up * 3000.0) * 0.6 + detailNoise(up * 9000.0) * 0.4;
+            S *= lerp(1.0, 0.93 + 0.12 * grain, zin);
+            float2 hp = float2(lon * cos(radians(lat)), lat);
+            float hv = (hp.x + hp.y) / 0.22;
+            float hl = abs(frac(hv) - 0.5) / max(fwidth(hv), 1e-4);
+            float stripe = 1.0 - smoothstep(0.6, 1.6, hl);
+            float mixZone = smoothstep(0.45, 0.8, mixed);
+            S *= 1.0 - 0.38 * stripe * mixZone * zin;
+        }
         lineP = float3(0.03, 0.03, 0.035); lineC = float3(0.004, 0.004, 0.006); coastC = float3(0.30, 0.42, 0.52) * 0.7;
         grid = float3(0.5, 0.5, 0.5); gridA = 0.0; riverC = float3(0.05, 0.10, 0.16); glowC = float3(1.0, 1.0, 1.0);
         flat_ = 1.0; pW = 0.55;
@@ -789,6 +803,21 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
         float3 mapL = normalize(up * 1.1 + north * 0.7 - east * 0.7);
         float hill = dot(vn, mapL) / max(dot(up, mapL), 0.2);
         o *= lerp(1.0, clamp(hill, 0.55, 1.45), style < 2.5 ? 0.75 : 0.5);
+        if (style < 1.5)
+        {
+            // Strategic (0.1.25): form lines on slopes, drawn across the fall line like a topographic
+            // map's contours, denser and darker where the ground is steeper.
+            float3 slopeV = vn - up * dot(vn, up);
+            float steep = length(slopeV);
+            if (steep > 0.03)
+            {
+                float3 fallD = slopeV / steep;
+                float cv2 = dot(up * 6371.0, fallD) / 6.0;              // a line every ~6 km across the slope
+                float cl2 = abs(frac(cv2) - 0.5) / max(fwidth(cv2), 1e-4);
+                float form = (1.0 - smoothstep(0.5, 1.5, cl2)) * smoothstep(0.03, 0.25, steep);
+                o = lerp(o, o * 0.55 + float3(0.02, 0.05, 0.06), form * 0.55 * smoothstep(0.6, 0.15, camH));
+            }
+        }
     }
     // Sea (0.1.5): a continental shelf from the land nearby (the coverage mips of the surface map),
     // depth contours like a nautical chart, slow wave texture and light along the coasts.
@@ -844,6 +873,23 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
         dg.x += 0.5 * fmod(floor(dg.y) + 1000.0, 2.0);
         float2 df = (frac(dg) - 0.5) / max(fwidth(dg.y), 1e-4);
         o += grid * dots * (1.0 - smoothstep(0.7, 1.5, length(df))) * (1.0 - smoothstep(70.0, 84.0, alat0)); // a hex dot grid
+    }
+    if (style > 2.5)
+    {
+        // Holo Table (0.1.25): light from the projector, a glow at the globe's edge, a slow rolling
+        // band, a faint flicker and a rare horizontal glitch line.
+        float3 hb2 = float3(0.25, 0.65, 1.0);
+        float3 V = normalize(frame.cameraPosition.xyz - input.worldPosition);
+        float limb = 1.0 - saturate(dot(up, V));
+        o += hb2 * pow(limb, 3.0) * 0.35;
+        float sy2 = input.clipPosition.y;
+        float roll = frac(sy2 * 0.0012 - time * 0.08);
+        o *= 0.92 + 0.16 * exp(-roll * 18.0);
+        float fl = 0.94 + 0.06 * sin(time * 23.0) * sin(time * 7.3 + 1.7);
+        o *= fl;
+        float gl2 = step(0.985, frac(sin(floor(time * 3.0) * 91.7) * 4375.85));
+        float gy = frac(sin(floor(time * 3.0) * 13.1) * 917.3) * 1080.0;
+        o += hb2 * gl2 * exp(-abs(sy2 - gy) * 0.6) * 0.25;
     }
     float3 dummy = o;
     o += strikeGround(up, dummy, 1.0) * 0.08;
