@@ -72,11 +72,15 @@ def lang_faith(k):
     faith = (f'{f1} and {f2} families; many secular' if f1 != f2 else f'{f1}; many secular')
     return lang, faith
 
+from peoples_story import describe
+import groups as _G
+# Each people's centre: its strongest seed (where its homeland lies).
+CENTRE = {g[0]: max(g[4], key=lambda s: s[2])[:2] for g in _G.EARTH + _G.MARS}
 out = os.path.join(D, 'ethnicity/peoples_info.tsv')
 with open(out, 'w', encoding='utf-8', newline='\n') as fh:
     fh.write('# Every people of 2240: language, faith, population and where they live. Built by tools/build_peoples_info.py.\n')
     fh.write('# Populations are estimates: each province\'s share of its planet (Earth 8.6 bn, Mars 410 m) by area x night lights, split by its ethnic mix.\n')
-    fh.write('# key\tname\tfamily\tcolour\tparents\tlanguage\tfaith\tpopulation\tprovinces\tstrongholds\thistory\n')
+    fh.write('# key\tname\tfamily\tcolour\tparents\tlanguage\tfaith\tpopulation\tprovinces\tstrongholds\thistory\tdescription\n')
     rows = []
     for k, g in groups.items():
         lang, faith = lang_faith(k)
@@ -84,5 +88,9 @@ with open(out, 'w', encoding='utf-8', newline='\n') as fh:
         strong = ', '.join(n for _, n in sorted(where[k], reverse=True)[:3])
         rows.append((pop[k], k, g[1], g[2], g[3], par, lang, faith, strong, g[5]))
     for p, k, name, fam, col, par, lang, faith, strong, hist in sorted(rows, reverse=True):
-        fh.write(f'{k}\t{name}\t{fam}\t{col}\t{par}\t{lang}\t{faith}\t{int(round(p, -3))}\t{nprov[k]}\t{strong}\t{hist}\n')
+        la, lo = CENTRE.get(k, (0.0, 0.0))
+        # Enclaves too small to show in any province mix still hold a town or two.
+        p = max(p, 150000.0 if k in PARENTS else 60000.0)
+        desc = describe(k, name, fam, hist, lang, faith, p, strong, par, la, lo, 'Mars' if k.startswith('m_') else 'Earth')
+        fh.write(f'{k}\t{name}\t{fam}\t{col}\t{par}\t{lang}\t{faith}\t{int(round(p, -3))}\t{nprov[k]}\t{strong}\t{hist}\t{desc}\n')
 print('written', out, len(rows), 'peoples; largest:', ', '.join(f'{r[2]} {fmt(r[0])}' for r in sorted(rows, reverse=True)[:6]))

@@ -94,6 +94,7 @@ aside { display: grid; gap: 12px; min-width: 0; }
 .grp .n { font-family: var(--font-data); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .fam { font-family: var(--font-data); font-size: 11px; color: var(--muted); }
 #sel .note { font-size: 13px; line-height: 1.45; margin: 6px 0 0; }
+#sel .story { font-size: 14px; line-height: 1.55; margin: 8px 0 10px; max-width: 62ch; }
 .facts2 { display: grid; gap: 5px; margin: 8px 0 4px; }
 .fact { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 8px; font-size: 13px; line-height: 1.35; }
 .fact span { font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.1em; font-size: 11px; color: var(--muted); padding-top: 2px; }
@@ -337,7 +338,7 @@ aside { display: grid; gap: 12px; min-width: 0; }
     const fmtPop = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + ' billion' : n >= 1e6 ? (n / 1e6).toFixed(1) + ' million' : Math.round(n / 1e3) + ' thousand';
     const facts = [['Population', g.pop ? fmtPop(g.pop) : '\u2013'], ['Language', g.language], ['Faith', g.faith], g.parents ? ['Born from', g.parents] : null, ['Strongholds', g.strong]].filter(Boolean)
       .map(([k, v]) => `<div class="fact"><span>${k}</span><b>${esc(v || '\u2013')}</b></div>`).join('');
-    el.innerHTML = `<h3>${esc(g.name)}</h3><div class="rg fam">${esc(g.family)} \u00b7 in ${where.length} provinces on ${state.body}</div><div class="facts2">${facts}</div><p class="note">${esc(g.note)}</p>
+    el.innerHTML = `<h3>${esc(g.name)}</h3><div class="rg fam">${esc(g.family)} \u00b7 in ${where.length} provinces on ${state.body}</div><p class="note story">${esc(g.desc || g.note)}</p><div class="facts2">${facts}</div>
       <div class="legend-key"><span>few</span><span class="ramp" style="background:linear-gradient(90deg, #262b33, ${g.color})"></span><span>most</span></div>
       <div class="mix" style="margin-top:10px">${top}</div>
       <p class="hint" style="margin-top:8px">Strongest provinces first. Click the people again to clear.</p>`;

@@ -55,7 +55,7 @@ INFO = {
  'sakha': ('Sakha (Yakut), Russian', 'Aar Aiyy (Sakha faith), Orthodox'),
  'ugric': ('Khanty, Mansi, Nenets', 'Animist, Orthodox'),
  'evenk': ('Evenki, Even, Russian', 'Shamanist, Orthodox'),
- 'sibiryak': ('Siberian Russian with Chinese, Korean and Turkic loanwords', 'Secular, Orthodox, Buddhist and Muslim mix'),
+ 'sibiryak': ('Siberian Russian with Chinese, Korean and Turkic loanwords', 'Secular, Orthodox, Buddhist, Muslim'),
  'hindustani': ('Hindi-Urdu', 'Hindu, Muslim'),
  'punjabi': ('Punjabi', 'Sikh, Muslim, Hindu'),
  'sindhi': ('Sindhi', 'Muslim, Hindu'),
