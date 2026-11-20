@@ -183,6 +183,10 @@ def contrast_colors(groups, colors, land, seed, amp):
         m = (a != b) & (a >= 0) & (b >= 0)
         np.add.at(adj, (a[m], b[m]), 1); np.add.at(adj, (b[m], a[m]), 1)
     size = np.bincount(top[top >= 0], minlength=G)
+    # 0.1.21: keep neighbours of neighbours apart too (half weight), so two peoples one country apart
+    # never end up with the same colour.
+    a1 = (adj > 0).astype(np.float32)
+    adj = a1 + 0.5 * ((a1 @ a1) > 0).astype(np.float32) * (1 - a1) * (1 - np.eye(G, dtype=np.float32))
     out = dict(colors)
     done = []
     for gi in np.argsort(-size):
@@ -195,7 +199,7 @@ def contrast_colors(groups, colors, land, seed, amp):
                 for val in (0.6, 0.72, 0.85):
                     c = np.array(colorsys.hsv_to_rgb(((h0 * 360 + dh) % 360) / 360, sat, val))
                     nb = [(adj[gi, j], np.array(out[groups[j][0]])) for j in done if adj[gi, j] > 0]
-                    md = min([np.linalg.norm(c - cj) for _, cj in nb], default=1.0)
+                    md = min([np.linalg.norm(c - cj) / (1.0 if wj >= 1 else 0.6) for wj, cj in nb], default=1.0)
                     score = min(md, 0.45) - abs(dh) / 600
                     if score > best: best, bc = score, tuple(c)
         out[k] = bc; done.append(gi)

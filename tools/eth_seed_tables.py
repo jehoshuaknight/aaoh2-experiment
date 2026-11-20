@@ -51,7 +51,8 @@ def body(name, groups, nreg_expected=None):
         d = np.degrees(np.arccos(np.clip(P @ unit(np.array(la), np.array(lo)), -1, 1)))
         boost = (0.45 + 2.2 * 0.3) if k in FUSION_PARENTS else 1.0
         Sc[gi[k]] += w * boost * np.exp(-(d / r) ** 2)
-    rank = np.argsort(-Sc, 0)[:3]                         # top three peoples at each point
+    rank = np.argsort(-Sc, 0)[:2]                         # 0.1.21: the two strongest peoples at each point
+    Sbest = Sc.max(0)
     nreg = max(region.values()) + 1
     out, start = [], []
     for r in range(nreg):
@@ -68,13 +69,20 @@ def body(name, groups, nreg_expected=None):
                 winners.add(gi[k])
         ks = sorted((G[i] for i in winners), key=lambda k: index[k])[:96]
         start.append(len(out))
-        for k, la, lo, w, rr in seeds:
-            if k in ks:
-                pass
+        best_here = np.maximum(Sbest[mm], 1e-6) if mm.any() else None
         for k in ks:
             for kk, la, lo, w, rr in seeds:
                 if kk != k:
                     continue
+                # 0.1.21: drop a seed that is under 1 % of the strongest pull everywhere in the region
+                # (small enclave seeds whose centre lies in the region are always kept)
+                if best_here is not None:
+                    y = min(H - 1, max(0, int((90 - la) / 180 * H))); x = min(W - 1, max(0, int((lo + 180) / 360 * W)))
+                    if not (rr < 1.5 and mm[y, x]):
+                        d = np.degrees(np.arccos(np.clip(P[mm] @ unit(np.array(la), np.array(lo)), -1, 1)))
+                        boost = (0.45 + 2.2 * 0.3) if k in FUSION_PARENTS else 1.0
+                        if (w * boost * np.exp(-(d / rr) ** 2) / best_here).max() < 0.01:
+                            continue
                 # 0.1.20: the seed as a unit vector (10 bits a component), so the shader needs no trigonometry
                 v = unit(np.array(la), np.array(lo))
                 q = [max(0, min(1023, int(round((c + 1.0) * 511.5)))) for c in v]
