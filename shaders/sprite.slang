@@ -17,6 +17,8 @@ struct SpriteOutput
     float2 local;        // -1..1 across the sprite
     float4 color;
     float shape;
+    float3 world;        // 0.1.24: where on the sprite this is, for nebula and territory texture
+    float time;          // frame time, passed on so the fragment stage needs no frame uniform
 };
 
 static const float2 corners[6] = {
@@ -45,8 +47,21 @@ SpriteOutput vertexMain(SpriteInput input)
     output.local = corner;
     output.color = input.color;
     output.shape = input.params.x;
+    output.world = world;
+    output.time = frame.misc.y;
     return output;
 }
+
+// 0.1.24: smooth 3D value noise for nebulae and territory shimmer.
+float spHash(float3 p) { p = frac(p * 0.3183099 + 0.1); p *= 17.0; return frac(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float spNoise(float3 x)
+{
+    float3 i = floor(x), f = frac(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return lerp(lerp(lerp(spHash(i), spHash(i + float3(1, 0, 0)), f.x), lerp(spHash(i + float3(0, 1, 0)), spHash(i + float3(1, 1, 0)), f.x), f.y),
+                lerp(lerp(spHash(i + float3(0, 0, 1)), spHash(i + float3(1, 0, 1)), f.x), lerp(spHash(i + float3(0, 1, 1)), spHash(i + float3(1, 1, 1)), f.x), f.y), f.z);
+}
+float spFbm(float3 x) { return spNoise(x) * 0.5 + spNoise(x * 2.03 + 7.1) * 0.27 + spNoise(x * 4.1 + 3.3) * 0.15 + spNoise(x * 8.3 + 1.7) * 0.08; }
 
 [shader("fragment")]
 float4 fragmentMain(SpriteOutput input) : SV_Target
@@ -84,6 +99,20 @@ float4 fragmentMain(SpriteOutput input) : SV_Target
     {
         // Star: tight bright core with a faint halo.
         intensity = exp(-r * r * 14.0) * 2.2 + pow(1.0 - r, 3.0) * 0.35;
+        // 0.1.24: glows that cover much of the screen (the galaxy's arms and clouds) turn into
+        // nebulae: wisps and dark lanes in the sprite's colour, drifting very slowly.
+        float px = 2.0 / max(fwidth(input.local.x), 1e-5);   // sprite size on screen, pixels
+        float neb = smoothstep(160.0, 420.0, px);
+        if (neb > 0.0)
+        {
+            float3 q = float3(input.local * 2.2, 0.0) + input.world * 0.002 + float3(0.0, 0.0, input.time * 0.004);
+            float w = spFbm(q + spFbm(q * 0.7) * 1.6);
+            float lanes = smoothstep(0.30, 0.55, spFbm(q * 1.7 + 11.0));
+            float wisp = (0.35 + 1.3 * smoothstep(0.35, 0.8, w)) * lerp(0.55, 1.0, lanes);
+            intensity = lerp(intensity, intensity * wisp, neb);
+            float3 hue = lerp(input.color.rgb, input.color.rgb * float3(0.85, 0.75, 1.25), smoothstep(0.5, 0.8, w));
+            return float4(hue * input.color.a * intensity, 1.0);
+        }
     }
     else if (input.shape < 1.5)
     {
@@ -92,8 +121,9 @@ float4 fragmentMain(SpriteOutput input) : SV_Target
     }
     else if (input.shape < 2.5)
     {
-        // Territory: flat fill that fades out at the rim.
-        intensity = smoothstep(1.0, 0.6, r);
+        // Territory: flat fill that fades out at the rim; 0.1.24: a brighter rim and a slow shimmer.
+        float shimmer = 0.85 + 0.3 * spNoise(float3(input.local * 3.0, input.time * 0.12) + input.world * 0.01);
+        intensity = smoothstep(1.0, 0.6, r) * shimmer + exp(-pow((r - 0.78) / 0.07, 2.0)) * 0.35;
     }
     else
     {

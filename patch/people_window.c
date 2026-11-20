@@ -13,11 +13,13 @@ typedef void  (*ProvPanelFn)(void *ui, void *view, char *L, void *r9);
 typedef Rect *(*PanelFn)(Rect *out, void *ui, Rect *r, SV *title);
 typedef char  (*ButtonFn)(void *ui, Rect *r, SV *label, uint64_t flags);
 typedef float (*TextFn)(void *ui, float x, float y, SV *s, float *color);
+typedef void  (*FillFn)(void *ui, Rect *r, float *color);
 
 #define RVA_PROV_PANEL 0x175c60u
 #define RVA_PANEL      0x1662a0u
 #define RVA_BUTTON     0x166760u
 #define RVA_TEXT       0x165300u
+#define RVA_FILL       0x1633e0u
 
 static char *image_base(void)
 {
@@ -39,6 +41,13 @@ static uint32_t prefix(const char *a, uint64_t n, const char *b)
     return i;
 }
 static const char *str(uint32_t off) { return PW_STR + off; }
+
+/* a people's map colour as an on-screen (sRGB) colour */
+static void colour_of(uint32_t rgb, float a, float *c)
+{
+    c[0] = (float)((rgb >> 16) & 255u) / 255.0f; c[1] = (float)((rgb >> 8) & 255u) / 255.0f;
+    c[2] = (float)(rgb & 255u) / 255.0f; c[3] = a;
+}
 
 static float text(TextFn t, void *ui, float x, float y, const char *s, uint32_t n, float *col)
 {
@@ -155,6 +164,11 @@ __attribute__((used)) void pw_hook(void *ui, void *view, char *L, void *r9)
     __asm__("" : "+r"(xl));   /* keep the address computed (no absolute pointer in data) */
     SV xs = { 1, xl };
     if (button(ui, &xb, &xs, 0)) { st.closed = 1; return; }
+    FillFn fill = (FillFn)(B + RVA_FILL);
+    float accent[4];
+    colour_of(G->colour, 1.0f, accent);
+    Rect bar = { c.x, c.y - 3.0f, c.w, 3.0f };                /* accent line in the people's colour */
+    fill(ui, &bar, accent);
 
     float x = c.x + 4.0f, y = c.y + 2.0f, w = c.w - 8.0f, ymax = c.y + c.h - 4.0f;
     text(t, ui, x, y, "Peoples of ", 11, col_dim);
@@ -169,6 +183,7 @@ __attribute__((used)) void pw_hook(void *ui, void *view, char *L, void *r9)
         uint32_t maxc = (uint32_t)(tw / cw) - 1; if (maxc > 60) maxc = 60; if (maxc < 4) maxc = 4;
         const char *nm = str(Q->shortname);
         char pct[6]; uint32_t pn = 0; uint32_t v = P->pct[k];
+        lab[n++] = ' '; lab[n++] = ' ';                           /* room for the colour swatch */
         if (k == st.tab) lab[n++] = '>';
         if (v >= 100) pct[pn++] = '1', pct[pn++] = '0', pct[pn++] = '0';
         else { if (v >= 10) pct[pn++] = (char)('0' + v / 10); pct[pn++] = (char)('0' + v % 10); }
@@ -180,6 +195,10 @@ __attribute__((used)) void pw_hook(void *ui, void *view, char *L, void *r9)
         Rect b = { x + (tw + 8.0f) * (float)k, y, tw, lh + 4.0f };
         SV s = { n, lab };
         if (button(ui, &b, &s, 0) && st.tab != k) { st.tab = k; st.page = 0; }
+        float sw[4];
+        colour_of(Q->colour, 1.0f, sw);
+        Rect sq = { b.x + 5.0f, b.y + (b.h - 10.0f) * 0.5f, 10.0f, 10.0f };
+        fill(ui, &sq, sw);
     }
     y += lh + 12.0f;
 

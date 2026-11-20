@@ -1007,6 +1007,51 @@ float3 globeBump(float2 uv, float3 n)
     return normalize(n - (east * (lx - l0) - north * (ly - l0)) * k);
 }
 
+// ---- 0.1.24 beautification -------------------------------------------------------------------
+// Mars-like surface: a red world that is not Earth (no own flag in the engine), told by the map's
+// average colour.
+bool marsLikeSurface(float2 uv, uint flags)
+{
+    if ((flags & 32u) != 0u) return false;
+    float3 avg = baseColorTexture.SampleLevel(uv, 11.0).rgb;
+    return avg.r > avg.b * 1.45 && avg.r > avg.g * 1.12;
+}
+
+// A cyclone field on a cloud deck: a few storms drifting west, each twisting the cloud it sits in
+// and wound with spiral bands around a clear eye. Returns the twisted direction; band adds cloud.
+float3 cycloneWarp(float3 up, float time, out float band, out float eye)
+{
+    band = 0.0; eye = 0.0;
+    float3 q = up;
+    for (int i = 0; i < 4; i++)
+    {
+        float fi = float(i);
+        float lat = radians(i == 0 ? 17.0 : (i == 1 ? -21.0 : (i == 2 ? 24.0 : -14.0)));
+        float lon = fi * 1.9 + 0.7 - time * 0.0016 * (1.0 + 0.3 * fi);
+        float3 c = float3(cos(lat) * cos(lon), sin(lat), -cos(lat) * sin(lon));
+        float R = 0.075 + 0.02 * fi;                         // radians: a storm some 500 km across
+        float cr = dot(q, c);
+        if (cr < 0.97) continue;
+        float r = acos(clamp(cr, -1.0, 1.0));
+        float fall = exp(-(r * r) / (R * R));
+        float spin = lat > 0.0 ? 1.0 : -1.0;                 // counter-clockwise in the north
+        float3 e1 = normalize(cross(float3(0.0, 1.0, 0.0), c) + float3(1e-5, 0.0, 0.0));
+        float3 e2 = cross(c, e1);
+        float2 lp = float2(dot(q, e1), dot(q, e2));
+        float ang = spin * 2.6 * fall;
+        float cs = cos(ang), sn = sin(ang);
+        float2 rp = float2(cs * lp.x - sn * lp.y, sn * lp.x + cs * lp.y);
+        q = normalize(c * cr + e1 * rp.x + e2 * rp.y);
+        float th = atan2(lp.y, lp.x);
+        float wob = detailNoise(q * 300.0) * 2.5 + detailNoise(q * 900.0) * 1.2;
+        float arms = 0.5 + 0.5 * sin(2.0 * th * spin - r / R * 7.0 + time * 0.35 + wob);
+        float rag = smoothstep(0.25, 0.75, detailNoise(q * 1500.0 + time * 0.01) * 0.6 + detailNoise(q * 4000.0) * 0.4);
+        band = max(band, smoothstep(0.45, 0.95, arms) * fall * smoothstep(0.12, 0.35, r / R) * (0.35 + 0.65 * rag));
+        eye = max(eye, exp(-pow(r / (R * 0.12), 2.0)));
+    }
+    return q;
+}
+
 [shader("fragment")]
 float4 fragmentLit(VertexOutput input) : SV_Target
 {
@@ -1160,6 +1205,36 @@ float4 fragmentLit(VertexOutput input) : SV_Target
             float bloom = smoothstep(0.45, 0.72, swirl) * life;
             albedo = lerp(albedo, float3(0.030, 0.105, 0.075), bloom * 0.55);
         }
+        // Oceans (0.1.24): shallows near the coast turn turquoise, deep water stays dark.
+        if (water > 0.0 && !flat)
+        {
+            float coast = smoothstep(0.04, 0.35, baseColorTexture.SampleLevel(input.uv, 3.0).a);
+            float shelf = smoothstep(0.02, 0.25, baseColorTexture.SampleLevel(input.uv, 5.0).a);
+            albedo = lerp(albedo, albedo * float3(0.55, 1.15, 1.10) + float3(0.0, 0.020, 0.022), water * (coast * 0.55 + shelf * 0.25));
+            albedo *= lerp(1.0, 0.82, water * (1.0 - shelf));
+        }
+        // Mars (0.1.24): seasonal frost caps from the sun's real latitude, and drifting dust storms.
+        if (!flat && marsLikeSurface(input.uv, flags))
+        {
+            float3 axis = normalize(draw.model[1].xyz);
+            float latD = degrees(asin(clamp(dot(up, axis), -1.0, 1.0)));
+            float sunLat = degrees(asin(clamp(dot(toSun, axis), -1.0, 1.0)));
+            float winter = saturate(-sign(latD) * sunLat / 25.0);   // 1 deep in this hemisphere's winter
+            float summer = saturate(sign(latD) * sunLat / 25.0);
+            float edge = lerp(lerp(74.0, 58.0, winter), 84.0, summer);
+            float ragged = (detailNoise(up * 9.0) - 0.5) * 9.0 + (detailNoise(up * 30.0) - 0.5) * 5.0 + (detailNoise(up * 110.0) - 0.5) * 2.0;
+            float frost = smoothstep(edge - 1.0, edge + 9.0, abs(latD) + ragged);
+            frost *= 0.7 + 0.3 * (detailNoise(up * 18.0) * 0.6 + detailNoise(up * 47.0) * 0.4);   // thin, patchy frost at the edge
+            albedo = lerp(albedo, float3(0.86, 0.84, 0.82), frost * 0.85);
+            float tt = frame.misc.y;
+            float3 sp = up * 2.6 + float3(tt * 0.0035, 0.0, tt * 0.0012);
+            float field = detailNoise(sp) * 0.65 + detailNoise(sp * 2.7 + 13.0) * 0.35;
+            float dust = smoothstep(0.58, 0.78, field);
+            float front = smoothstep(0.56, 0.62, field) - smoothstep(0.62, 0.72, field);
+            float3 ochre = float3(0.60, 0.40, 0.25);
+            albedo = lerp(albedo, ochre * (0.9 + 0.2 * detailNoise(up * 60.0 + tt * 0.01)), dust * 0.65);
+            albedo += ochre * front * 0.12;
+        }
     }
 
     float visibility = draw.pointLight.w > 0.5 || flat ? 1.0 : sunVisibility(input.worldPosition, normal, nDotL);
@@ -1182,6 +1257,15 @@ float4 fragmentLit(VertexOutput input) : SV_Target
     float3 sky = airy ? airMultiple(1.0002, airUp) * AIR_PI * 3.0 : float3(0.0, 0.0, 0.0);
     float3 color = albedo * (frame.ambient.rgb + frame.sunColor.rgb * (sunAir * nDotL * visibility * terminator * shade + sky));
     color += albedo * draw.params.x;
+    if (surface && !flat)
+    {
+        // Golden hour (0.1.24): ground the sun is low over takes a warm cast, and just past sunset
+        // the sky's afterglow keeps a faint rose light on it.
+        float golden = exp(-pow((sunUp - 0.07) / 0.07, 2.0));
+        color *= lerp(float3(1.0, 1.0, 1.0), float3(1.10, 0.90, 0.72), golden * 0.45);
+        float after = exp(-pow((sunUp + 0.035) / 0.035, 2.0));
+        color += albedo * frame.sunColor.rgb * float3(0.30, 0.14, 0.10) * after * (hasAir ? 0.12 : 0.04);
+    }
 
     if (globe)
     {
@@ -1225,6 +1309,21 @@ float4 fragmentLit(VertexOutput input) : SV_Target
         float3 h = normalize(toSun + toCamera);
         float lit = step(0.0, sunUp) * visibility * shade;
         float3 wn = up;
+        if (water > 0.0 && !flat)
+        {
+            // Waves (0.1.24): wind ripples drifting with time tilt the water, so the sun glint
+            // breaks into sparkle; stronger close in.
+            float camW = length(frame.cameraPosition.xyz - draw.model[3].xyz) / length(draw.model[0].xyz) - 1.0;
+            float near = saturate((1.2 - camW) / 1.1);
+            float3 wA = normalize(cross(up, abs(up.y) < 0.95 ? float3(0, 1, 0) : float3(1, 0, 0)));
+            float3 wB = cross(up, wA);
+            float tw = frame.misc.y;
+            float3 wp = up * 900.0 + float3(tw * 0.35, 0.0, tw * 0.22);
+            float3 wq = up * 2600.0 - float3(tw * 0.6, tw * 0.3, 0.0);
+            float gx = detailNoise(wp + wA * 0.6) - detailNoise(wp - wA * 0.6) + 0.5 * (detailNoise(wq + wA * 0.6) - detailNoise(wq - wA * 0.6));
+            float gy = detailNoise(wp + wB * 0.6) - detailNoise(wp - wB * 0.6) + 0.5 * (detailNoise(wq + wB * 0.6) - detailNoise(wq - wB * 0.6));
+            wn = normalize(up + (wA * gx + wB * gy) * (0.035 + 0.10 * near) * water);
+        }
         float nh = saturate(dot(wn, h));
         float nv = max(dot(wn, toCamera), 1e-3);
         float fresnel = 0.02 + 0.98 * pow(1.0 - saturate(dot(wn, toCamera)), 5.0);
@@ -1254,6 +1353,19 @@ float4 fragmentLit(VertexOutput input) : SV_Target
             waterLight += frame.atmosphere.rgb * frame.atmosphere.w * fresnel * 0.6 * smoothstep(-0.1, 0.3, sunUp);
         }
         color += waterLight * water * lit;
+        if (water > 0.0 && !flat)
+        {
+            // Surf (0.1.24): foam lines along the shore, rolling in and fading, seen from low orbit.
+            float camF = length(frame.cameraPosition.xyz - draw.model[3].xyz) / length(draw.model[0].xyz) - 1.0;
+            float nearF = saturate((0.8 - camF) / 0.7);
+            if (nearF > 0.0)
+            {
+                float shore = smoothstep(0.03, 0.30, baseColorTexture.SampleLevel(input.uv, 1.0).a);
+                float roll = 0.5 + 0.5 * sin(frame.misc.y * 0.9 + detailNoise(up * 1500.0) * 9.0 - shore * 6.0);
+                float foam = shore * smoothstep(0.55, 0.95, roll) * (0.6 + 0.4 * detailNoise(up * 9000.0));
+                color += frame.sunColor.rgb * sunAir * float3(0.9, 0.95, 1.0) * foam * nearF * water * 0.10 * smoothstep(-0.02, 0.2, sunUp);
+            }
+        }
         // Ice and snow: bright, pale ground gets a soft sheen.
         float lum = dot(albedo, float3(0.3, 0.59, 0.11));
         float sat = max(albedo.r, max(albedo.g, albedo.b)) - min(albedo.r, min(albedo.g, albedo.b));
@@ -1265,7 +1377,19 @@ float4 fragmentLit(VertexOutput input) : SV_Target
         float night = 1.0 - smoothstep(-0.15, 0.05, sunUp);
         float dens = smoothstep(0.03, 0.7, li);
         float3 gc = lerp(float3(1.0, 0.50, 0.16), float3(1.0, 0.74, 0.45), smoothstep(0.7, 1.0, li));
-        color += gc * (0.04 + 0.95 * dens * dens) * li * night * 0.95;
+        bool marsNight = marsLikeSurface(input.uv, flags);
+        if (marsNight)
+            gc = lerp(float3(0.70, 0.85, 1.0), float3(0.92, 0.96, 1.0), smoothstep(0.6, 1.0, li));   // dome lights
+        // Dusk (0.1.24): the lights come on block by block as the sun goes down, not all at once.
+        float onAt = detailHash(floor(up * 1800.0)) * 0.55;
+        float cityNight = smoothstep(onAt, onAt + 0.35, night);
+        color += gc * (0.04 + 0.95 * dens * dens) * li * cityNight * 0.95;
+        if (marsNight)
+        {
+            // Domes glow as soft pale bubbles over the settlements.
+            float domeL = saturate((baseColorTexture.SampleLevel(input.uv, 3.0).a - 0.5) * 2.0);
+            color += float3(0.55, 0.75, 1.0) * smoothstep(0.05, 0.5, domeL) * 0.16 * night;
+        }
         // Living night (0.1.19): megacity halos, twinkling blocks, lit roads and, on Earth, auroras.
         if (night > 0.0)
         {
@@ -1460,6 +1584,22 @@ float4 fragmentVolumetricClouds(VertexOutput input) : SV_Target
     float3 local = input.worldPosition - draw.model[3].xyz;
     float3 up = normalize(local);
     float2 uv = input.uv + float2(draw.extra.w, 0.0);
+    // Cyclones (0.1.24): on white (Earth-like) decks, storms twist the cloud into spirals round an eye.
+    float stormBand = 0.0, stormEye = 0.0;
+    bool whiteDeck = dot(abs(draw.baseColor.rgb - 1.0), float3(1.0, 1.0, 1.0)) < 0.1 && draw.params.z < 1.5;
+    if (whiteDeck)
+    {
+        float3 pdir = directionFromMap(frac(uv));
+        float3 tw = cycloneWarp(pdir, time, stormBand, stormEye);
+        if (stormBand > 0.0 || stormEye > 0.0 || dot(tw, pdir) < 0.99999)
+        {
+            float lonW = atan2(-tw.z, tw.x);
+            float latW = asin(clamp(tw.y, -1.0, 1.0));
+            float2 wuv = float2((lonW + 3.14159265) / 6.2831853, (1.5707963 - latW) / 3.14159265);
+            wuv.x = uv.x + (frac(wuv.x - uv.x + 0.5) - 0.5);   // keep it continuous with uv
+            uv = wuv;
+        }
+    }
     float sy = clamp(abs(up.y), 0.0, 1.0);
     cl.bias = max(log2(1.0 / max(sqrt(1.0 - min(sy, 0.985) * min(sy, 0.985)), 0.02)) - 1.0, 0.0);
     cl.polar = 0.0;
@@ -1471,6 +1611,7 @@ float4 fragmentVolumetricClouds(VertexOutput input) : SV_Target
         cl.polar = smoothstep(0.30, 0.85, baseColorTexture.SampleBias(float2(0.37 + pq.x * 0.0045, 0.30 + pq.y * 0.009), 1.0).r);
     }
     float d = vcDensity(cl, uv) * step(0.01, alpha);
+    d = max(d, stormBand * 0.7) * (1.0 - stormEye * 0.95);
     if (d < 0.02)
         discard;
     float alat = degrees(asin(sy));
