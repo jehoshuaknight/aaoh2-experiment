@@ -44,7 +44,7 @@ for f in sorted(info, key=lambda r: ascii_(r[1]).lower()):
     key, name, desc = f[0], f[1], f[-1]
     body = 'Mars' if key.startswith('m_') else 'Earth'
     title = ascii_(re.sub(r'\s*\([^)]*\)', '', name)).strip() + ('' if body == 'Earth' else ' (Mars)')
-    ents.append('[[event]]\nyear = 2240\nera = "Peoples of 2240"\ntitle = ' + toml_str(title) + '\ntext = ' + toml_str(ascii_(desc)) + '\nfactions = []\n')
+    ents.append('[[event]]\nyear = 2240\nera = "Peoples of 2240"\ntitle = ' + toml_str(title) + '\ntext = ' + toml_str(ascii_(desc.replace('\\n\\n', ' ').replace('\\n', ' '))) + '\nfactions = []\n')
 h = h.rstrip() + '\n\n' + MARK_H + '\n# Every people of Earth and Mars, A to Z. Open with F4.\n\n' + '\n'.join(ents)
 open(hp, 'w', encoding='utf-8', newline='\n').write(h)
 
@@ -59,7 +59,9 @@ H, W = ids.shape
 water = np.asarray(Image.open(os.path.join(T, 'Earth_water.png')).convert('L').resize((W, H), Image.NEAREST)) > 127
 short = {k: ascii_(re.sub(r'\s*\([^)]*\)', '', g[1])).strip() for k, g in groups.items()}
 added = 0
-for f in tsv(os.path.join(D, 'earth/ethnicity.tsv')):
+# 0.1.23: the People window (patch/people_window.c) shows a province's peoples, so no more 'Peoples:' city
+# lines; this loop now only removes the old ones.
+for f in ([] if True else tsv(os.path.join(D, 'earth/ethnicity.tsv'))):
     pid = int(f[0])
     m = (ids == pid) & ~water
     ys, xs = np.nonzero(m)

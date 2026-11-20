@@ -153,63 +153,138 @@ def place(note, strongholds, family):
         n = 'the ' + n
     return n
 
+FAITH_LOWER = ('Secular', 'Folk', 'Traditional', 'Animist', 'Indigenous', 'Mostly', 'Mixed', 'Ancestral', 'Many', 'Shamanist', 'Shamanism')
+
 def faith_text(faith):
     parts = [p.strip() for p in items(faith.replace(';', ',')) if p.strip()]
     seen = []
     for p in parts:
+        if p.split()[0] in FAITH_LOWER:
+            p = p[0].lower() + p[1:]
         if p.lower() not in [x.lower() for x in seen]:
             seen.append(p)
     if not seen: return 'of many faiths'
     if len(seen) == 1: return seen[0]
     return ', '.join(seen[:-1]) + ' or ' + seen[-1]
 
-def describe(key, name, family, homeland, language, faith, pop, strongholds, parents, lat, lon, body):
+from peoples_lore_1 import LORE as _L1
+from peoples_lore_2 import LORE as _L2
+from peoples_lore_3 import LORE as _L3
+from peoples_lore_4 import LORE as _L4
+from peoples_lore_5 import LORE as _L5
+from peoples_lore_6 import LORE as _L6
+from peoples_lore_7 import LORE as _L7
+LORE = {**_L1, **_L2, **_L3, **_L4, **_L5, **_L6, **_L7}
+
+MARS_LORE = {
+ 'm_tharsian': ('The Tharsians are the people of the great volcanic bulge, where the first domes went up under Arsia and Pavonis in the 2060s and the independence movement was born.',
+                'They live in pressurised towns dug into lava tubes, keep Landing Day with the old flight logs read aloud, and are proud, blunt and fiercely loyal to the Martian cause.'),
+ 'm_hellasian': ('The Hellasians settled the floor of Hellas, the deepest basin on Mars, where the air is thickest and the first open-air farms became possible under the domes.',
+                 'They are farmers and engineers, famous for their greenhouses, their slow, careful speech and the lantern festivals held in the long dust season.'),
+ 'm_arabian': ('The Martian Arabians live on the cratered uplands of Arabia Terra, settled by miners and later by families from the Gulf, Turkey and South Asia.',
+               'They keep coffee and hospitality in the old way, build their towns around ice mines, and pray towards an Earth-bound Mecca by a calendar of their own.'),
+ 'm_boreal': ('The Boreal coasters settled the northern lowlands around the new polar sea that the terraformers began to fill in the twenty-second century.',
+              'They are sailors on the first seas of Mars, fishers of farmed fish under ice, and they say they are the only Martians who have ever seen waves.'),
+ 'm_elysian': ('The Elysians live around the Elysium volcanoes, a later wave of settlers from Asia and Europe who came with the industrial boom of the 2120s.',
+               'They run the foundries and reactors of the north, love music played in the vast lava-tube halls, and quarrel cheerfully with the Tharsians over who founded Mars.'),
+ 'm_marineris': ('The Mariners are the people of Valles Marineris, the great canyon, whose cliff towns hang on walls seven kilometres high.',
+                 'They climb, fly gliders on the canyon winds, and keep the most mixed culture on Mars, a crossroads of every settler line.'),
+ 'm_austral': ('The Southern highlanders live on the old, cold cratered south of Mars, the last region settled, among ice miners and observatories.',
+               'They are hardy, solitary and famously hospitable to travellers caught by dust storms, and keep the longest memory of the dead in every family.'),
+}
+
+def _join(xs):
+    xs = [x for x in xs if x]
+    if not xs: return ''
+    if len(xs) == 1: return xs[0]
+    return ', '.join(xs[:-1]) + ' and ' + xs[-1]
+
+def _short(n):
+    return re.sub(r'\s*\([^)]*\)', '', n).strip()
+
+def _life2240(key, pop, ctx, strongholds):
+    s = []
+    if strongholds:
+        s.append(pick(key + 'w', [f'Their heartland in 2240 is {_join([x.strip() for x in strongholds.split(",")])}.',
+                                  f'Today most of them live in {_join([x.strip() for x in strongholds.split(",")])}.']))
+    mj, npv = ctx.get('majority', 0), ctx.get('provinces', 0)
+    if mj >= 2: s.append(f'They are the majority in {mj} provinces and live in {npv} in all.')
+    elif mj == 1: s.append(f'They are the majority in one province and live in {npv} in all.')
+    elif npv > 1: s.append(f'They are a minority wherever they live, spread over {npv} provinces.')
+    nb = [_short(n) for n in ctx.get('neighbours', [])]
+    if nb:
+        s.append(pick(key + 'n', [f'Their closest neighbours are the {_join(nb)}, and mixed marriages and shared markets are common.',
+                                  f'They share towns and valleys with the {_join(nb)}.',
+                                  f'Around them live the {_join(nb)}; old rivalries have softened, but the jokes have not.']))
+    if pop >= 100e6:
+        s.append(pick(key + 'z', ['They are one of the great peoples of Earth, and no government of the Commonwealth can rule without them.',
+                                  'Their numbers give them a loud voice in Earth\'s politics and in the long argument about the war with Mars.']))
+    elif pop >= 5e6:
+        s.append(pick(key + 'z', ['Their schools, newspapers and broadcasts work in their own language, and their young people move freely between home and the megacities.',
+                                  'They have their own media, universities and parties, and send their sons and daughters to the Commonwealth\'s fleets and offices.']))
+    else:
+        s.append(pick(key + 'z', ['Small as they are, they have kept their language and customs, helped by the cultural charters of the Commonwealth.',
+                                  'They are few, and their elders worry about the young leaving for the cities, but their festivals still bring everyone home.']))
+    return ' '.join(s)
+
+def describe(key, name, family, homeland, language, faith, pop, strongholds, parents, lat, lon, body, ctx=None):
+    ctx = ctx or {}
     the = name if name.lower().startswith('the ') else 'the ' + name
     The = the[0].upper() + the[1:]
     land = place(homeland, strongholds, family)
-    lang1 = (language if ('loanwords' in language or '(' in language) else items(language)[0]) if language else ''
     faith_l = faith_text(faith)
     p = fmt_pop(pop)
-    s = []
+    mars_note = homeland.split('. Mars:')[1].strip().rstrip('.') if '. Mars:' in homeland else ''
+    paras = []
     if family == 'Martian':
-        s.append(pick(key, [f'The people of {land} are {the}, about {p} strong, born on Mars of the settlers who came in the 2060s and after.',
-                            f'{The} are the Martian-born people of {land}, about {p} in 2240.']))
-        s.append(f'They speak {language}, and most hold to {faith_l}.')
-        s.append('Their parents and grandparents fought in the war of independence that began in 2186; they think of themselves as Martians first, and of Earth as the old country that taxed them without a vote.')
-        if strongholds: s.append(f'Their heartland runs through {strongholds}.')
-        return ' '.join(s)
+        h, c = MARS_LORE.get(key, ('', ''))
+        paras.append(pick(key, [f'The people of {land} are {the}, about {p} strong, born on Mars of the settlers who came in the 2060s and after.',
+                                f'{The} are the Martian-born people of {land}, about {p} in 2240.']) + f' They speak {language}, and most hold to {faith_l}.')
+        paras.append((h + ' ' if h else '') + 'Their parents and grandparents fought in the war of independence that began in 2186; they think of themselves as Martians first, and of Earth as the old country that taxed them without a vote.')
+        if c: paras.append(c)
+        paras.append(_life2240(key, pop, ctx, strongholds))
+        return '\n\n'.join(x for x in paras if x)
     if parents:
-        a, b = [re.sub(r'\s*\([^)]*\)', '', x).strip() for x in parents.split('+')]
+        pa, pb = [x.strip() for x in parents.split('+')]
+        a, b = _short(pa), _short(pb)
         origin = homeland.rstrip('.')
-        if not strongholds:
-            s.append(f'{The} are a fusion people of 2240: {origin}, grown into one community.')
-            origin = None
-        if origin is not None: s.append(pick(key, [f'The people of {land} are {the}, a new people of the twenty-third century, born where {a} and {b} families met and married.',
-                            f'{The} are a fusion people of 2240 from {land}: {origin}, grown into one community.',
-                            f'In {land}, {a} and {b} families have lived side by side for so long that their grandchildren became a people of their own, {the}.']))
+        speech = language.split('(')[0].strip()
         fparts = [x.strip() for x in faith.split(';')[0].replace(' families', '').split(' and ')]
         fparts = [x for i, x in enumerate(fparts) if x and x.lower() not in [y.lower() for y in fparts[:i]]]
         rel = [x for x in fparts if x.lower() != 'secular']
         fusion_faith = (' or '.join(rel) + ' by family, and many are secular') if rel else 'mostly secular'
-        speech = language.split('(')[0].strip()
-        s.append(pick(key + 'l', [f'At home they speak {speech}, switching between the two in the same sentence; they are {fusion_faith}.',
-                                  f'Their everyday speech mixes {speech}. In faith they are {fusion_faith}.']))
-        s.append(pick(key + 'p', [f'They number about {p}, almost all in cities.', f'About {p} of them live in 2240, mostly in the big towns.']))
-        if strongholds: s.append(f'You find them above all in {strongholds}.')
-        s.append(pick(key + 'h', ['They are young, urban and ambitious, and the old communities they came from watch them with a mix of pride and suspicion.',
-                                  'They are the face of the new Earth: mixed, mobile, and loyal to their city before any old nation.',
-                                  'Older relatives on both sides complain they have lost their roots; they answer that they grew new ones.']))
-        return ' '.join(s)
+        paras.append(pick(key, [f'The people of {land} are {the}, a new people of the twenty-third century, born where {a} and {b} families met and married.',
+                                f'{The} are a fusion people of 2240 from {land}: {origin}, grown into one community.',
+                                f'In {land}, {a} and {b} families have lived side by side for so long that their grandchildren became a people of their own, {the}.'])
+                     + f' They number about {p}. At home they speak {speech}, switching between the two in the same sentence; they are {fusion_faith}.')
+        pk = ctx.get('parent_keys', [])
+        bits = []
+        for nm, k in zip((a, b), pk):
+            if k in LORE and LORE[k][1]:
+                bits.append(f'The {nm} side of the family keeps its own world alive. ' + LORE[k][1])
+        if bits: paras.append(' '.join(bits))
+        paras.append(pick(key + 'h', ['Their weddings run for days with two kinds of music, their kitchens mix both cuisines into something new, and their children grow up with grandparents who still argue about whose customs come first.',
+                                      'They are young, urban and ambitious, and the old communities they came from watch them with a mix of pride and suspicion.',
+                                      'They are the face of the new Earth: mixed, mobile, and loyal to their city before any old nation.'])
+                     + ' ' + pick(key + 'q', ['Older relatives on both sides complain they have lost their roots; they answer that they grew new ones.',
+                                             'Their slang, their food stalls and their music have spread far beyond their own neighbourhoods.']))
+        paras.append(_life2240(key, pop, ctx, strongholds))
+        return '\n\n'.join(x for x in paras if x)
     # real peoples
-    s.append(pick(key, [f'The people of {land} are {the}, about {p} strong in 2240.',
-                        f'{The} are the people of {land}, and in 2240 they number about {p}.',
-                        f'In {land} live {the}, a people of about {p} in 2240.']))
-    past = FAMILY_PAST.get(family)
-    if past: s.append(past)
-    s.append(pick(key + 'l', [f'They speak {language}, and most are {faith_l}.',
-                              f'Their language is {lang1}. In faith most are {faith_l}.',
-                              f'{lang1} is their language, and most of them are {faith_l}.']))
-    if strongholds: s.append(pick(key + 's', [f'Their strongholds are {strongholds}.', f'They are strongest in {strongholds}.']))
-    hk = hook(lat, lon, key, family)
-    if hk: s.append(hk)
-    return ' '.join(s)
+    lang1 = language
+    paras.append(pick(key, [f'The people of {land} are {the}, about {p} strong in 2240.',
+                            f'{The} are the people of {land}, and in 2240 they number about {p}.',
+                            f'In {land} live {the}, a people of about {p} in 2240.'])
+                 + ' ' + pick(key + 'l', [f'They speak {lang1}, and most are {faith_l}.',
+                                          f'Their language is {lang1}; in faith most are {faith_l}.']))
+    h, c = LORE.get(key, ('', ''))
+    past = FAMILY_PAST.get(family, '')
+    paras.append(' '.join(x for x in (past, h) if x))
+    if c: paras.append(c)
+    hk = hook(lat, lon, key, family) or ''
+    tail = _life2240(key, pop, ctx, strongholds)
+    if mars_note:
+        tail += ' ' + pick(key + 'm', [f'Some of them went to Mars as well: {mars_note[0].lower() + mars_note[1:]}.',
+                                      f'Their story reaches Mars too: {mars_note[0].lower() + mars_note[1:]}.'])
+    paras.append(' '.join(x for x in (hk, tail) if x))
+    return '\n\n'.join(x for x in paras if x)

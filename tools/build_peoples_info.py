@@ -20,6 +20,8 @@ def tsv(p):
 
 groups = {f[0]: f for f in tsv(os.path.join(D, 'ethnicity/groups.tsv'))}
 pop = {k: 0.0 for k in groups}; where = {k: [] for k in groups}; nprov = {k: 0 for k in groups}
+# 0.1.23: who lives beside whom (people shared in the same provinces), and where each people is the majority
+share = {k: {} for k in groups}; major = {k: 0 for k in groups}
 for low in ('earth', 'mars'):
     names = {f[0]: f[2] for f in tsv(os.path.join(D, low, 'provinces.tsv'))}
     weight = {}
@@ -52,6 +54,13 @@ for low in ('earth', 'mars'):
     tot = sum(weight.values())
     for f in tsv(os.path.join(D, low, 'ethnicity.tsv')):
         p = TOTAL[low] * weight.get(f[0], 0) / tot
+        mix = [(kv.split(':')[0], int(kv.split(':')[1])) for kv in f[2].split(';') if kv.split(':')[0] in groups]
+        if mix and max(mix, key=lambda m: m[1])[1] >= 50:
+            major[max(mix, key=lambda m: m[1])[0]] += 1
+        for a, va in mix:
+            for b, vb in mix:
+                if a != b:
+                    share[a][b] = share[a].get(b, 0.0) + p * min(va, vb) / 100
         for kv in f[2].split(';'):
             k, v = kv.split(':')
             if k in pop:
@@ -91,6 +100,10 @@ with open(out, 'w', encoding='utf-8', newline='\n') as fh:
         la, lo = CENTRE.get(k, (0.0, 0.0))
         # Enclaves too small to show in any province mix still hold a town or two.
         p = max(p, 150000.0 if k in PARENTS else 60000.0)
-        desc = describe(k, name, fam, hist, lang, faith, p, strong, par, la, lo, 'Mars' if k.startswith('m_') else 'Earth')
+        nb = [groups[b][1] for b, _ in sorted(share[k].items(), key=lambda kv: -kv[1])[:3] if b not in PARENTS.get(k, ())]
+        ctx = {'neighbours': nb, 'majority': major[k], 'provinces': nprov[k],
+               'parent_keys': list(PARENTS.get(k, ()))}
+        desc = describe(k, name, fam, hist, lang, faith, p, strong, par, la, lo, 'Mars' if k.startswith('m_') else 'Earth', ctx)
+        desc = desc.replace('\n', '\\n')   # paragraphs, escaped for the TSV
         fh.write(f'{k}\t{name}\t{fam}\t{col}\t{par}\t{lang}\t{faith}\t{int(round(p, -3))}\t{nprov[k]}\t{strong}\t{hist}\t{desc}\n')
 print('written', out, len(rows), 'peoples; largest:', ', '.join(f'{r[2]} {fmt(r[0])}' for r in sorted(rows, reverse=True)[:6]))
