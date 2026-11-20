@@ -539,11 +539,37 @@ void ethTake(uint g, float acc, inout float best, inout float second, inout uint
     else if (acc > second) { second = acc; gs = g; }
 }
 
+// ethTake with each people's size (largest seed reach), for the ragged borders (0.1.22).
+void ethTakeR(uint g, float acc, float rad, inout float best, inout float second, inout uint gb, inout uint gs,
+              inout float rb, inout float rs, float core, inout float coreB)
+{
+    if (acc > best) { second = best; gs = gb; rs = rb; best = acc; gb = g; rb = rad; coreB = core; }
+    else if (acc > second) { second = acc; gs = g; rs = rad; }
+}
+
+// A people's border noise (0.1.22): two octaves, a few hundred km and under a hundred km across.
+float ethEdge(float3 up, float fw, float g)
+{
+    float sd = g * 1.37 + 5.0;
+    return 0.62 * aaOct(up, 0.22, fw, sd) + 0.38 * aaOct(up, 0.85, fw, sd + 2.3) - 0.5;
+}
+
 // One homeland seed's pull at a point (0.1.20): squared chord distance in degrees (no acos), and no exp()
 // beyond three reaches, where the pull is negligible.
 float seedScore(float3 q, float3 c, float w, float invR2)
 {
     float x = 2.0 * (1.0 - dot(q, c)) * 3282.806 * invR2;
+    return x < 9.0 ? w * exp(-x) : 0.0;
+}
+
+// 0.1.22: the same pull from an elongated seed (an ellipse of the same area, stretched e times along
+// the axis), so homelands are lobed and drawn-out like real ones rather than round blobs.
+float seedScoreEll(float3 q, float3 c, float w, float invR2, float3 axis, float e)
+{
+    float3 d = q - c;
+    float dd = dot(d, d);
+    float al = dot(d, axis);
+    float x = (dd * e + al * al * (1.0 / e - e)) * 3282.806 * invR2;
     return x < 9.0 ? w * exp(-x) : 0.0;
 }
 
@@ -564,12 +590,16 @@ float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out
     float3 northV = cross(up, eastV);
     float2 wq = float2(aaOct(up, 0.06, fw, 11.0), aaOct(up, 0.06, fw, 23.0)) - 0.5;
     float2 wf = float2(aaOct(up, 0.45, fw, 31.0), aaOct(up, 0.45, fw, 37.0)) - 0.5;
-    float3 p = normalize(up + (eastV * wq.x + northV * wq.y) * 0.13 + (eastV * wf.x + northV * wf.y) * 0.022);
+    // 0.1.22: a finer wobble too, so borders and enclave rims are ragged rather than smooth arcs
+    float2 wv = float2(aaOct(up, 1.4, fw, 41.0), aaOct(up, 1.4, fw, 43.0)) - 0.5;
+    float3 fine = (eastV * wf.x + northV * wf.y) * 0.03 + (eastV * wv.x + northV * wv.y) * 0.016;
+    float3 p = normalize(up + (eastV * wq.x + northV * wq.y) * 0.13 + fine);
+    float3 ps = normalize(up + fine);   // small enclaves: only the fine wobble, at their own scale
     float best = 0.0, second = 0.0;
     uint gb = 0u, gs = 0u;
     float urbanMul = 0.45 + 2.2 * city;
     uint2 rr = seedRange(uint(r) + (earth ? 0u : EARTH_REGIONS));
-    float acc = 0.0;
+    float acc = 0.0, accR = 0.0, rb = 0.0, rs = 0.0, accC = 0.0, coreB = 0.0;
     uint cur = 0xFFFFu;
     for (uint i = rr.x; i < rr.y && i < rr.x + 160u; i++)
     {
@@ -577,23 +607,44 @@ float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out
         uint g = (e.y >> 16) & 511u;
         if (g != cur)
         {
-            if (cur != 0xFFFFu) ethTake(cur, acc, best, second, gb, gs);
-            cur = g; acc = 0.0;
+            if (cur != 0xFFFFu) ethTakeR(cur, acc, accR, best, second, gb, gs, rb, rs, accC, coreB);
+            cur = g; acc = 0.0; accR = 0.0; accC = 0.0;
         }
         float3 c = normalize(float3(float(e.x & 1023u), float((e.x >> 10) & 1023u), float((e.x >> 20) & 1023u)) / 511.5 - 1.0);
         float rad = float((e.y >> 8) & 255u) / 8.0;
         float w = float(e.y & 255u) / 32.0;
+        accR = max(accR, rad);
         if (((e.y >> 25) & 1u) != 0u)
             w *= urbanMul;
-        // Big zones wander (warped point); small enclaves stay exactly where their people live.
-        acc += seedScore(rad > 2.5 ? p : up, c, w, 1.0 / (rad * rad));
+        // Big zones wander (warped point); small enclaves stay where their people live, only wobbling.
+        uint st = e.y >> 30;
+        float sc;
+        if (st == 0u)
+            sc = seedScore(rad > 2.5 ? p : ps, c, w, 1.0 / (rad * rad));
+        else
+        {
+            float ang = float((e.y >> 26) & 15u) * 0.19634954;   // 16ths of pi
+            float3 axis = eastV * cos(ang) + northV * sin(ang);
+            sc = seedScoreEll(rad > 2.5 ? p : ps, c, w, 1.0 / (rad * rad), axis, 1.0 + 0.35 * float(st));
+        }
+        acc += sc;
+        if (rad <= 1.0) accC += sc;
     }
-    if (cur != 0xFFFFu) ethTake(cur, acc, best, second, gb, gs);
+    if (cur != 0xFFFFu) ethTakeR(cur, acc, accR, best, second, gb, gs, rb, rs, accC, coreB);
     float3 empty = float3(0.46, 0.44, 0.40);
     if (best <= 0.0)
         return empty;
     // Smooth, anti-aliased edge where two zones meet; up close a thin ink line along it.
     float gap = log(best / max(second, 1e-5));
+    // 0.1.22: ragged, interfingering borders. Each people pushes its edge out and in along its own noise;
+    // in log terms, so a big zone's border moves by tens of km and a small enclave's rim by a few.
+    // A people's own core (its tiny calibrated seeds) is never flipped away, so all 500 stay on the map.
+    if (second > 0.0 && coreB < 0.5 * best)
+    {
+        float amp = 2.8 * clamp(min(rb, rs) / 5.0, 0.3, 1.0);   // small peoples: gentler, never swallowed
+        gap += amp * (ethEdge(up, fw, float(gb)) - ethEdge(up, fw, float(gs)));
+        if (gap < 0.0) { uint t = gb; gb = gs; gs = t; gap = -gap; }
+    }
     float aa = 0.012 + fw * 0.25;
     float k = second > 0.0 ? 0.5 * (1.0 - smoothstep(0.0, aa, gap)) : 0.0;
     float3 col = lerp(ethColour(gb), ethColour(gs), k);

@@ -23,6 +23,12 @@ def n3(p):
 def aao(up,f,fw,seed):
     off=np.array([np.mod(seed*0.618,1),np.mod(seed*0.377,1),np.mod(seed*0.271,1)])*97.0
     k=np.clip(1-(fw*f-0.2)/0.3,0,1); return 0.5+(n3(up*(57.29578*f)+off)-0.5)*k
+def aaoV(up,f,fw,seed):
+    off=np.stack([np.mod(seed*0.618,1),np.mod(seed*0.377,1),np.mod(seed*0.271,1)],-1)*97.0
+    k=np.clip(1-(fw*f-0.2)/0.3,0,1); return 0.5+(n3(up*(57.29578*f)+off)-0.5)*k
+def edgeN(U,fw,g):
+    sd=g.astype(np.float64)*1.37+5.0
+    return 0.62*aaoV(U,0.22,fw,sd)+0.38*aaoV(U,0.85,fw,sd+2.3)-0.5
 def tsv(p):
     for l in open(p,encoding='utf-8'):
         if l.startswith('#') or not l.strip(): continue
@@ -42,7 +48,10 @@ def render(lon0,lon1,lat1,lat0,fw,name):
     east=np.cross(np.array([0,1,0.]),up); east/=np.linalg.norm(east,axis=-1,keepdims=True); north=np.cross(up,east)
     wq=np.stack([aao(up,0.06,fw,11), aao(up,0.06,fw,23)],-1)-0.5
     wf=np.stack([aao(up,0.45,fw,31), aao(up,0.45,fw,37)],-1)-0.5
-    p=up+(east*wq[...,0:1]+north*wq[...,1:2])*0.13+(east*wf[...,0:1]+north*wf[...,1:2])*0.022; p/=np.linalg.norm(p,axis=-1,keepdims=True)
+    wv=np.stack([aao(up,1.4,fw,41), aao(up,1.4,fw,43)],-1)-0.5
+    fine=(east*wf[...,0:1]+north*wf[...,1:2])*0.03+(east*wv[...,0:1]+north*wv[...,1:2])*0.016
+    p=up+(east*wq[...,0:1]+north*wq[...,1:2])*0.13+fine; p/=np.linalg.norm(p,axis=-1,keepdims=True)
+    ps=up+fine; ps/=np.linalg.norm(ps,axis=-1,keepdims=True)
     city=ss(0.05,0.6,np.clip((lights[py,px]-0.0)*1.0,0,1))
     out=np.zeros(LAT.shape+(3,),np.float32)
     for r in np.unique(R_):
@@ -51,14 +60,24 @@ def render(lon0,lon1,lat1,lat0,fw,name):
         g=(E[:,1]>>16)&511
         cvec=np.stack([(E[:,0]&1023),((E[:,0]>>10)&1023),((E[:,0]>>20)&1023)],-1)/511.5-1.0; cvec/=np.linalg.norm(cvec,axis=-1,keepdims=True)
         w=(E[:,1]&255)/32; rad=((E[:,1]>>8)&255)/8; urb=((E[:,1]>>25)&1)==1
-        xW=2*(1-P@cvec.T)*3282.806/(rad**2)[None,:]; x0=2*(1-up[m]@cvec.T)*3282.806/(rad**2)[None,:]
-        xx=np.where((rad>2.5)[None,:],xW,x0)
+        st=(E[:,1]>>30)&3; ang=((E[:,1]>>26)&15)*0.19634954; ee=1+0.35*st
+        def xs(Q):
+            ax=east[m][:,None,:]*np.cos(ang)[None,:,None]+north[m][:,None,:]*np.sin(ang)[None,:,None]
+            d=Q[:,None,:]-cvec[None,:,:]; dd=(d*d).sum(-1); al=(d*ax).sum(-1)
+            return (dd*ee[None,:]+al*al*(1/ee-ee)[None,:])*3282.806/(rad**2)[None,:]
+        xx=np.where((rad>2.5)[None,:],xs(P),xs(ps[m]))
         W_=np.where(urb[None,:], w[None,:]*(0.45+2.2*C[:,None]), w[None,:])
         contrib=np.where(xx<9,W_*np.exp(-xx),0)
-        ug=np.unique(g); sc=np.stack([contrib[:,g==k].sum(1) for k in ug],1)
+        ug=np.unique(g); sc=np.stack([contrib[:,g==k].sum(1) for k in ug],1); gR=np.array([rad[g==k].max() for k in ug]); cc=np.where((rad<=1.0)[None,:],contrib,0); scC=np.stack([cc[:,g==k].sum(1) for k in ug],1)
         o=np.argsort(-sc,1); best=np.take_along_axis(sc,o[:,:1],1)[:,0]; second=np.take_along_axis(sc,o[:,1:2],1)[:,0] if sc.shape[1]>1 else np.zeros_like(best)
         gb=ug[o[:,0]]; gs=ug[o[:,1]] if sc.shape[1]>1 else gb
-        gap=np.log(np.maximum(best,1e-9)/np.maximum(second,1e-5)); aa=0.012+fw*0.25
+        gap=np.log(np.maximum(best,1e-9)/np.maximum(second,1e-5))
+        U=up[m]
+        rb_=gR[o[:,0]]; rs_=gR[o[:,1]] if sc.shape[1]>1 else rb_
+        amp=2.8*np.clip(np.minimum(rb_,rs_)/5.0,0.3,1.0)
+        coreB=np.take_along_axis(scC,o[:,:1],1)[:,0]
+        gap=gap+np.where((second>0)&(coreB<0.5*best),amp*(edgeN(U,fw,gb)-edgeN(U,fw,gs)),0)
+        sw_=gap<0; gb,gs=np.where(sw_,gs,gb),np.where(sw_,gb,gs); gap=np.abs(gap); aa=0.012+fw*0.25
         k=np.where(second>0,0.5*(1-ss(0,aa,gap)),0)
         col=cols[gb]*(1-k[:,None])+cols[gs]*k[:,None]
         ink=np.where(second>0,(1-ss(0,aa*0.6,gap))*(1-ss(0.03,0.15,fw)),0); col*= (1-0.22*ink)[:,None]

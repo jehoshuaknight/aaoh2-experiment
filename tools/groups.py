@@ -230,5 +230,9 @@ MANUAL_CORES = {
     'mon': [(16.89, 97.63, 4.5, 0.5)],             # Hpa-an
     'mbundu': [(-9.54, 16.34, 4.5, 0.6)],          # Malanje
     'pedi': [(-23.9, 29.45, 4.5, 0.6)],            # Polokwane
+    'rakhine': [(20.9, 93.6, 4.5, 0.7)],           # Arakan hills above the drowned coast (0.1.22)
+    'f_tatarrus': [(55.8, 49.1, 3.0, 0.5)],         # Kazan
+    'f_turcogerman': [(51.85, 13.4, 3.0, 0.45)],    # the shore south of drowned Berlin
+    'indo_trini': [(10.63, -63.28, 4.5, 0.5)],      # Paria coast, where drowned Trinidad's people went
 }
 EARTH = [(k, n, fam, note, list(seeds) + list(MANUAL_CORES.get(k, []))) for k, n, fam, note, seeds in EARTH]

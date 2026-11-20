@@ -9,7 +9,7 @@ that can win somewhere in or near the region; seedRange(region) gives the slice.
 
 usage: python3 -I eth_seed_tables.py <AstraNovum dir> <tools dir with groups.py> <out .slang>
 """
-import sys, os
+import sys, os, zlib
 import numpy as np
 from PIL import Image
 
@@ -87,8 +87,13 @@ def body(name, groups, nreg_expected=None):
                 v = unit(np.array(la), np.array(lo))
                 q = [max(0, min(1023, int(round((c + 1.0) * 511.5)))) for c in v]
                 a = q[0] | q[1] << 10 | q[2] << 20
+                # 0.1.22: every seed is an ellipse (16 orientations, stretch 1 to 2.05, area kept), so zones
+                # and enclaves get lobed, elongated shapes instead of round blobs; small seeds stretch more
+                hsh = zlib.crc32(f'{k}|{la:.3f}|{lo:.3f}'.encode())
+                ang = hsh & 15
+                st = 1 + (hsh >> 4) % 3 if rr <= 2.5 else (hsh >> 4) % 3
                 b = (max(1, min(255, round(w * 32))) | max(1, min(255, round(rr * 8))) << 8
-                     | index[k] << 16 | (1 if k in FUSION_PARENTS else 0) << 25)
+                     | index[k] << 16 | (1 if k in FUSION_PARENTS else 0) << 25 | ang << 26 | st << 30)
                 out.append((a, b))
     start.append(len(out))
     return nreg, start, out
