@@ -106,6 +106,48 @@ def sw(fn, vals, default='0u', ret='uint'):
     body = '\n'.join(f'    case {i}u: return {v};' for i, v in enumerate(vals))
     return f'{ret} {fn}(uint i)\n{{\n    switch (i)\n    {{\n{body}\n    default: return {default};\n    }}\n}}\n\n'
 
+# ---- language families for the language layer of the Peoples map
+fam = {f[0]: f[2] for f in tsv(os.path.join(D, 'ethnicity/groups.tsv'))}
+SPEAKS = {  # peoples whose language belongs to another family than their ancestry
+    'african_am': 'Germanic', 'jamaican': 'Germanic', 'afro_carib': 'Germanic', 'ndyuka': 'Germanic', 'guyanese': 'Germanic',
+    'haitian': 'Romance', 'afro_brazilian': 'Romance', 'afro_colombian': 'Romance', 'esmeraldeno': 'Romance', 'cuban': 'Romance',
+    'hisp_carib': 'Romance', 'metis': 'Romance', 'garifuna': 'Indigenous American',
+    'sibiryak': 'Slavic', 'ob_exiles': 'Slavic', 'reacher': 'Germanic', 'greenlander': 'Germanic', 'lowlander': 'Germanic',
+    'austral': 'Romance', 'delta_diaspora': 'Indo-Aryan', 'indo_trini': 'Germanic',
+}
+sys.path.insert(0, os.environ.get('ASTRA_TOOLS', os.path.join(os.path.dirname(os.path.abspath(__file__)))))
+try:
+    from groups import FUSION_PARENTS
+except Exception:
+    FUSION_PARENTS = {}
+def lang_of(k):
+    if k in SPEAKS: return SPEAKS[k]
+    if k in FUSION_PARENTS: return lang_of(FUSION_PARENTS[k][0])
+    f = fam.get(k, 'Other')
+    if k.startswith('m_'): return 'Martian creoles'
+    return f.split('/')[0]
+LANG_HEX = {  # hand-picked, muted, distinct for neighbours that meet on the map
+    'Germanic': 0x7c8fc9, 'Romance': 0xd98b6c, 'Slavic': 0x6fb5a8, 'Celtic': 0x59a36b, 'Finnic': 0x9fd0c8, 'Uralic': 0x8fbfa8,
+    'Baltic': 0xb7c97a, 'Ugric': 0xa7d6b0, 'Hellenic': 0x5f8fd6, 'Albanian': 0xc76b7a, 'Armenian': 0xb0617f, 'Kartvelian': 0xd1a35a,
+    'Caucasian': 0x9b7cb8, 'Turkic': 0xd4b25e, 'Iranian': 0x8bb35e, 'Semitic': 0xe0c98a, 'Berber': 0xc79a63, 'Mongolic': 0xc2c46b,
+    'Tungusic': 0x7fb0c8, 'Chukotko-Kamchatkan': 0x95a8b8, 'Indo-Aryan': 0xe0a070, 'Dravidian': 0xc9727a, 'Austroasiatic': 0x7dbf8e,
+    'Sinitic': 0xd16a6a, 'Tibeto-Burman': 0xa98fd0, 'Tai': 0x6fc49a, 'Hmong-Mien': 0xb5d17a, 'Koreanic': 0x6a8fe0, 'Japonic': 0xe08fb0,
+    'Austronesian': 0x5fbfc0, 'Papuan': 0x8f9f5a, 'Pama-Nyungan': 0xc48a5a, 'Polynesian': 0x4fa8d0, 'Chadic': 0xd8c070,
+    'Atlantic': 0xb4d080, 'Saharan': 0xe0b080, 'Volta-Niger': 0xc070a0, 'Benue-Congo': 0xa070c0, 'Kwa': 0x70c0a0, 'Mande': 0x90b050,
+    'Gur': 0xd0a050, 'Bantu': 0x6aa86a, 'Bantoid': 0x88c078, 'Nilotic': 0x7f8fd0, 'Nilo-Saharan': 0x9a7fc0, 'Cushitic': 0xd0907a,
+    'Ubangian': 0xb0a0e0, 'Songhai': 0xc0b070, 'Dogon': 0xa08060, 'Ijoid': 0x60b0b0, 'Khoe': 0xc8a878, 'Eskimo-Aleut': 0xa0c8e0,
+    'Indigenous American': 0xb6845a, 'Afro-Indigenous': 0x9a6a8a, 'Mixed': 0x9a9a9a, 'Basque': 0xe05a5a, 'Ainu': 0x90b0d0,
+    'Isolate': 0xb0b0b0, 'Central Sudanic': 0xa890b8, 'Mande': 0x90b050, 'Martian creoles': 0xc0604a, '2240 hybrid': 0xb070c0,
+}
+langs = sorted({lang_of(k) for k in keys})
+lang_index_of = {l: i for i, l in enumerate(langs)}
+lang_index = {k: lang_index_of[lang_of(k)] for k in keys}
+import colorsys, hashlib
+def auto(l):
+    h = int(hashlib.md5(l.encode()).hexdigest(), 16) % 360 / 360
+    r, g, b = colorsys.hsv_to_rgb(h, 0.45, 0.78); return int(r * 255) << 16 | int(g * 255) << 8 | int(b * 255)
+lang_cols = [LANG_HEX.get(l, auto(l)) for l in langs]
+
 en, es, ed, ec, eids, ermix = body('earth')
 mn, ms, md, mc, mids, mrmix = body('mars')
 pids = eids + mids
@@ -130,6 +172,9 @@ with open(OUT, 'w', newline='\n') as fh:
     fh.write(sw('regionRange', ranges, 'uint2(0u, 0u)', 'uint2'))
     fh.write(sw('provinceCentre', centre))
     fh.write(sw('provinceMix', mix, 'uint3(0u, 0u, 0u)', 'uint3'))
+    # Language families (0.1.19): which family each people speaks, and the family's map colour.
+    fh.write(sw('groupLang', [f'{lang_index[k]}u' for k in keys], '0u'))
+    fh.write(sw('langColourHex', [f'{c}u' for c in lang_cols], '7829367u'))
     # regionMix(r): x = g1 | g2 << 9 | s2 << 18, y = s1 (Earth regions, then Mars regions)
     fh.write(sw('regionMix', ermix + mrmix, 'uint2(0u, 100u)', 'uint2'))
 print(f'groups {len(keys)}, Earth {ec} provinces / {en} regions, Mars {mc} / {mn}')

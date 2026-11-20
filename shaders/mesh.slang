@@ -445,6 +445,12 @@ float regionGlowRadius()
 #include "ethnicity_tables.slang"
 #include "ethnicity_seeds.slang"
 
+float3 langColour(uint l)
+{
+    uint c = langColourHex(l);
+    return float3(float((c >> 16) & 255u), float((c >> 8) & 255u), float(c & 255u)) / 255.0;
+}
+
 float3 ethColour(uint g)
 {
     uint c = ethColourHex(g);
@@ -584,6 +590,16 @@ float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out
     float3 col = lerp(ethColour(gb), ethColour(gs), k);
     float ink = second > 0.0 ? (1.0 - smoothstep(0.0, aa * 0.6, gap)) * (1.0 - smoothstep(0.03, 0.15, fw)) : 0.0;
     col *= 1.0 - 0.22 * ink;
+    // Language layer (0.1.19): from orbit the map shows language families (peoples of one family merge
+    // into one bloc); zooming in to continent scale it fades into the individual peoples.
+    float langMix = smoothstep(0.075, 0.15, fw);
+    if (langMix > 0.0)
+    {
+        uint lb = groupLang(gb), ls = groupLang(gs);
+        bool differ = second > 0.0 && lb != ls;
+        float3 lcol = lerp(langColour(lb), langColour(ls), differ ? k : 0.0);
+        col = lerp(col, lcol, langMix);
+    }
     // Thinly peopled land (no people strong here) fades toward a neutral ground colour.
     col = lerp(empty, col, smoothstep(0.02, 0.15, best));
     mixed = second / best;
@@ -647,6 +663,12 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
         S = water ? float3(0.006, 0.009, 0.016) + float3(0.03, 0.12, 0.14) * near * 0.35 : lerp(float3(lumS, lumS, lumS) * 0.32 + 0.03, ink, own) * rel;
         lineP = float3(0.22, 0.62, 0.66); lineC = float3(0.40, 0.95, 0.98); coastC = float3(0.30, 0.80, 0.86); grid = float3(0.6, 0.65, 0.7); gridA = 0.09; riverC = float3(0.16, 0.42, 0.48); glowC = float3(0.45, 1.0, 1.0); scan = 0.07;
         cv = float2(0.40, 0.30);
+        if (hasData)
+        {
+            // borders drawn in the owner's colour (0.1.19)
+            lineC = lerp(lineC, ow * 1.05, 0.6);
+            coastC = lerp(coastC, ow, 0.35);
+        }
     }
     else if (style < 2.5 && hasData)
     {
@@ -726,6 +748,9 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
         float contour = (1.0 - smoothstep(0.5, 1.5, iso)) * step(0.05, shelf) * (style < 2.5 ? 0.6 : 1.0);
         sea += coastC * contour * 0.10 * lerp(1.0, 0.45, borderZoom());
         sea += coastC * pow(saturate(l1), 2.5) * 0.14; // light along the coast
+        // Strategic: territorial waters glow in the owner's colour, pulsing slowly.
+        if (style < 1.5 && hasData)
+            sea += (ow * 0.9 + 0.1) * pow(saturate(l1 * 1.2 + l2 * 0.4), 1.6) * 0.10 * (0.8 + 0.2 * sin(time * 0.7 + lon * 0.05));
         o = lerp(o, sea, 0.85);
     }
     o = lerp(o, riverC, river * 0.85); // rivers, in the style's own colour
@@ -739,6 +764,9 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
     {
         RegionField rf = regionField(input.uv, regionGlowRadius());
         float3 rt = lerp(lineC, regionTint(rf.own) * max(max(lineC.r, lineC.g), lineC.b), 0.55);
+        // Strategic (0.1.19): territory glows in its owner's colour, a power's mark on the map.
+        if (style < 1.5)
+            rt = lerp(ow * 0.95 + 0.05, regionTint(rf.own), 0.18) * 0.9;
         float shimmer = 0.85 + 0.15 * sin(time * 1.3 + (lon + lat) * 0.35);
         float g = pow(saturate(rf.glow * 3.0), 1.3) * (1.0 - ctryE);
         o += rt * g * (style < 2.5 ? 0.55 : 0.70) * lerp(0.6, 1.0, borderZoom()) * shimmer;
@@ -1178,6 +1206,44 @@ float4 fragmentLit(VertexOutput input) : SV_Target
         float dens = smoothstep(0.03, 0.7, li);
         float3 gc = lerp(float3(1.0, 0.50, 0.16), float3(1.0, 0.74, 0.45), smoothstep(0.7, 1.0, li));
         color += gc * (0.04 + 0.95 * dens * dens) * li * night * 0.95;
+        // Living night (0.1.19): megacity halos, twinkling blocks, lit roads and, on Earth, auroras.
+        if (night > 0.0)
+        {
+            float t = frame.misc.y;
+            // Megacities glow over their whole metropolitan area (the lights' coarse mips).
+            float wideL = saturate((baseColorTexture.SampleLevel(input.uv, 4.0).a - 0.5) * 2.0);
+            float widerL = saturate((baseColorTexture.SampleLevel(input.uv, 6.0).a - 0.5) * 2.0);
+            float mega = smoothstep(0.15, 0.6, wideL);
+            color += float3(1.0, 0.62, 0.30) * (mega * mega * 0.30 + smoothstep(0.08, 0.4, widerL) * 0.04) * night * (1.0 - water * 0.5);
+            // Twinkle: each lit block flickers a little, smoothly.
+            float3 cell = floor(up * 2600.0);
+            float tf = frac(t * 1.7), ti = floor(t * 1.7);
+            float tw = lerp(detailHash(cell + ti), detailHash(cell + ti + 1.0), tf * tf * (3.0 - 2.0 * tf));
+            color += gc * li * dens * night * (tw - 0.5) * 0.22;
+            // Roads: lights finer than their surroundings (thin bright lines) glow along the highways.
+            float fineL = li - saturate((baseColorTexture.SampleLevel(input.uv, 2.0).a - 0.5) * 2.0);
+            float road = smoothstep(0.02, 0.16, fineL) * (1.0 - dens) * (1.0 - water);
+            color += float3(1.0, 0.70, 0.35) * road * 0.30 * night;
+            // Auroras around the geomagnetic poles (Earth): green curtains with violet tops and moving rays.
+            if ((flags & 32u) != 0u)
+            {
+                float pl = radians(80.7), po = radians(-72.7);
+                float3 mAxis = float3(cos(pl) * cos(po), sin(pl), -cos(pl) * sin(po));
+                float mlat = degrees(asin(clamp(dot(up, mAxis), -1.0, 1.0)));
+                float band = exp(-pow((abs(mlat) - 67.0) / 3.5, 2.0));
+                if (band > 0.01)
+                {
+                    float3 e1 = normalize(cross(mAxis, float3(0.0, 0.0, 1.0)));
+                    float3 e2 = cross(mAxis, e1);
+                    float mlon = atan2(dot(up, e2), dot(up, e1));
+                    float curtain = hl_fbm(float2(mlon * 14.0 + t * 0.05, abs(mlat) * 0.6 + t * 0.02));
+                    float rays = 0.6 + 0.4 * sin(mlon * 120.0 + t * 0.8 + curtain * 6.0);
+                    float aur = band * smoothstep(0.45, 0.75, curtain) * rays;
+                    float3 aurC = lerp(float3(0.15, 1.0, 0.45), float3(0.6, 0.3, 1.0), saturate((abs(mlat) - 67.0) / 4.0 + 0.5));
+                    color += aurC * aur * night * 0.18;
+                }
+            }
+        }
         // Bioluminescent seas: living water glows a faint blue at night, shimmering along the coasts.
         float glowLife = (flags & 16u) != 0u ? relief.a * water : 0.0;
         if (glowLife > 0.0)
