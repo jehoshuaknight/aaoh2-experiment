@@ -52,6 +52,7 @@ def S(s):
     return offs[s]
 S('')
 people_idx, people_rows = {}, []
+pops = {}
 for k in groups:
     f = rec.get(k)
     if not f:
@@ -60,6 +61,7 @@ for k in groups:
     short = re.sub(r'\s*\([^)]*\)', '', name).strip()
     parents = f[ci['parents']].replace('+', ' and ') if f[ci['parents']] else ''
     fam = f[ci['family']]
+    pops[k] = int(f[ci['population']] or 0)
     people_idx[k] = len(people_rows)
     people_rows.append((S(name), S(short), S(fam), S(f[ci['language']]), S(f[ci['faith']]),
                         S(fmt_pop(f[ci['population']]) + (' (2240)' if int(f[ci['population']]) else '')),
@@ -77,6 +79,39 @@ with open(os.path.join(BUILD, 'people_data.h'), 'w') as h:
     h.write('typedef struct { uint32_t name, shortname, family, language, faith, number, parents, strongholds, description, colour; } PwPeople;\n')
     h.write('typedef struct { uint32_t name; uint16_t who[3]; uint8_t pct[3]; uint8_t pad; } PwProv;\n')
     h.write(f'#define PW_NPROV {len(prov_rows)}u\n')
+    # 0.1.26: the seed model on the CPU (hover picking) and each people's label anchor and rank
+    sys.path.insert(0, os.path.join(REPO, 'tools'))
+    import math
+    from groups import EARTH as _E, MARS as _M, FUSION_PARENTS as _FP
+    gidx = {k: i for i, k in enumerate(groups)}
+    seeds = []
+    for body, gl in ((0, _E), (1, _M)):
+        for g in gl:
+            if g[0] not in people_idx: continue
+            for la, lo, w, r in g[4]:
+                lr, ln = math.radians(la), math.radians(lo)
+                seeds.append((body, math.cos(lr) * math.cos(ln), math.sin(lr), -math.cos(lr) * math.sin(ln),
+                              w * ((0.45 + 2.2 * 0.3) if g[0] in _FP else 1.0), 3282.806 / (r * r), people_idx[g[0]]))
+    h.write(f'#define PW_NSEED {len(seeds)}u\n')
+    h.write('typedef struct { float x, y, z, w, k; uint16_t g; uint8_t body, pad; } PwSeed;\n')
+    h.write('static const PwSeed PW_SEED[] = {\n' + ',\n'.join(f'{{{x:.6f}f,{y:.6f}f,{z:.6f}f,{w:.4f}f,{k:.4f}f,{g},{b},0}}' for b, x, y, z, w, k, g in seeds) + '};\n')
+    anchors = []
+    for body, gl in ((0, _E), (1, _M)):
+        for g in gl:
+            if g[0] not in people_idx: continue
+            la, lo, w, r = max(g[4], key=lambda s_: s_[2] * s_[3] * s_[3])
+            anchors.append((people_idx[g[0]], body, la, lo, pops.get(g[0], 0)))
+    # one anchor per people and body (a people on Earth and Mars gets one on each)
+    seen = set(); anc = []
+    for a_ in sorted(anchors, key=lambda t: -t[4]):
+        if (a_[0], a_[1]) in seen: continue
+        seen.add((a_[0], a_[1])); anc.append(a_)
+    h.write(f'#define PW_NANCHOR {len(anc)}u\n')
+    h.write('typedef struct { float x, y, z; uint16_t who; uint8_t body, pad; } PwAnchor;\n')
+    def u(la, lo):
+        lr, ln = math.radians(la), math.radians(lo)
+        return math.cos(lr) * math.cos(ln), math.sin(lr), -math.cos(lr) * math.sin(ln)
+    h.write('static const PwAnchor PW_ANCHOR[] = {\n' + ',\n'.join('{%.6ff,%.6ff,%.6ff,%d,%d,0}' % (*u(la, lo), w, b) for w, b, la, lo, _ in anc) + '};\n')
     order = sorted(range(len(people_rows)), key=lambda i: pool[people_rows[i][0]:pool.index(0, people_rows[i][0])].decode().lower())
     h.write(f'#define PW_NPEOPLE {len(people_rows)}u\n')
     h.write('static const uint16_t PW_ORDER[] = {' + ','.join(map(str, order)) + '};\n')
@@ -90,7 +125,7 @@ obj = os.path.join(BUILD, 'people_window.o'); dll = os.path.join(BUILD, 'people_
 subprocess.check_call(['clang', '--target=x86_64-pc-windows-gnu', '-O2', '-ffreestanding', '-fno-builtin', '-nostdlib',
                        '-fno-stack-protector', '-mno-stack-arg-probe', '-fno-asynchronous-unwind-tables', '-fno-unwind-tables',
                        '-fno-jump-tables', '-mno-red-zone', '-I', BUILD, '-c', os.path.join(REPO, 'patch/people_window.c'), '-o', obj])
-subprocess.check_call(['lld-link', '/dll', '/noentry', '/nodefaultlib', '/export:pw_hook', '/merge:.rdata=.text', '/merge:.data=.text',
+subprocess.check_call(['lld-link', '/dll', '/noentry', '/nodefaultlib', '/export:pw_hook', '/export:pw_ui', '/export:pw_push', '/export:pw_frame_stub', '/merge:.rdata=.text', '/merge:.data=.text',
                        '/merge:.bss=.text', '/section:.text,ERW', '/opt:noref', '/out:' + dll, obj], stdout=subprocess.DEVNULL)
 dd = open(dll, 'rb').read()
 pe = struct.unpack_from('<I', dd, 0x3c)[0]; n = struct.unpack_from('<H', dd, pe + 6)[0]; so = struct.unpack_from('<H', dd, pe + 20)[0]
@@ -106,13 +141,20 @@ eva = struct.unpack_from('<I', dd, pe + 24 + 112)[0]
 def rva2off(r):
     for va, vs, ra, rs in secs.values():
         if va <= r < va + max(vs, rs): return r - va + ra
-fo = rva2off(eva); nfun = struct.unpack_from('<I', dd, fo + 20)[0]; afun = struct.unpack_from('<I', dd, fo + 28)[0]
-hook_rva_dll = struct.unpack_from('<I', dd, rva2off(afun))[0]
+fo = rva2off(eva)
+nnames = struct.unpack_from('<I', dd, fo + 24)[0]
+afun, anames, aord = struct.unpack_from('<III', dd, fo + 28)
+EXP = {}
+for i in range(nnames):
+    nm = dd[rva2off(struct.unpack_from('<I', dd, rva2off(anames) + 4 * i)[0]):].split(b'\0')[0].decode()
+    ordi = struct.unpack_from('<H', dd, rva2off(aord) + 2 * i)[0]
+    EXP[nm] = struct.unpack_from('<I', dd, rva2off(afun) + 4 * ordi)[0]
+hook_rva_dll = EXP['pw_hook']
 tva, tvs, tra, trs = secs['.text']
 blob = bytearray(dd[tra:tra + trs])[:max(tvs, 1)]
 blob += b'\0' * (tvs - len(blob))
 hook_off = hook_rva_dll - tva
-print(f'code+data: {len(blob)} bytes, pw_hook at +{hook_off:#x}')
+print(f'code+data: {len(blob)} bytes, exports', {k: hex(v - tva) for k, v in EXP.items()})
 
 # ---- 3. inject
 orig = EXE + '.orig'
@@ -147,5 +189,18 @@ def va2off(v):
 co = va2off(CALL_SITE)
 assert d[co] == 0xE8 and CALL_SITE + 5 + struct.unpack_from('<i', d, co + 1)[0] == PROV_PANEL, 'unexpected code at the call site'
 struct.pack_into('<i', d, co + 1, BASE + new_va + hook_off - (CALL_SITE + 5))
+def at(name): return BASE + new_va + EXP[name] - tva
+# 0.1.26: the planet view's UI frame goes through pw_ui (people names, hover)
+co = va2off(0x14016b9c4)
+assert d[co] == 0xE8 and 0x14016b9c4 + 5 + struct.unpack_from('<i', d, co + 1)[0] == 0x14017bea0, 'unexpected planet UI call'
+struct.pack_into('<i', d, co + 1, at('pw_ui') - (0x14016b9c4 + 5))
+# the frame uniforms: a call to pw_frame_stub replaces 'mov rdx, [rsp+0x578]' (8 bytes) just before the copy
+co = va2off(0x1400a59cc)
+assert bytes(d[co:co + 8]) == bytes.fromhex('488b942478050000'), 'unexpected frame-uniform code'
+d[co] = 0xE8; struct.pack_into('<i', d, co + 1, at('pw_frame_stub') - (0x1400a59cc + 5)); d[co + 5:co + 8] = bytes.fromhex('0f1f00')
+# vkCmdPushConstants: its import thunk jumps to pw_push, which records the planet's matrix and calls the real one
+co = va2off(0x14057ad78)
+assert bytes(d[co:co + 2]) == b'\xff\x25' and 0x14057ad78 + 6 + struct.unpack_from('<i', d, co + 2)[0] == 0x1408b76f0, 'unexpected push thunk'
+d[co] = 0xE9; struct.pack_into('<i', d, co + 1, at('pw_push') - (0x14057ad78 + 5)); d[co + 5] = 0x90
 open(EXE, 'wb').write(d)
 print(f'injected .astra at {BASE + new_va:#x} ({raw_sz} bytes); call at {CALL_SITE:#x} -> pw_hook')

@@ -102,6 +102,270 @@ static void row(TextFn t, void *ui, float x, float *y, float w, const char *labe
 }
 
 
+
+/* ---- 0.1.26: what the renderer knows, for labels, hover and highlight ------------------------- */
+#define RVA_PLANET_UI  0x17bea0u      /* the planet view's UI frame (called every frame) */
+#define RVA_VK_PUSH    0x8b76f0u      /* vkCmdPushConstants in the import table */
+typedef void (*PlanetUiFn)(void *a, void *ui, void *c, char *L);
+typedef void (*PushFn)(void *, void *, uint32_t, uint32_t, uint32_t, const void *);
+
+static struct {
+    float vp[16], cam[3], right[3], up[3];
+    float model[16]; uint32_t flags; int have;               /* the planet surface drawn last frame */
+    float cmodel[16]; uint32_t cflags; float cscale;         /* candidate in the frame being drawn */
+    uint32_t sel, hover; int tick;                           /* people index + 1 (0 = none) */
+} g;
+
+static float fsqrt(float x) { float r; __asm__("sqrtss %1, %0" : "=x"(r) : "x"(x)); return r; }
+static float fexpn(float x)                                  /* e^-x for x >= 0 */
+{
+    static const float en[10] = { 1.0f, 0.36787944f, 0.13533528f, 0.04978707f, 0.01831564f,
+                                  0.00673795f, 0.00247875f, 0.00091188f, 0.00033546f, 0.00012341f };
+    if (x >= 10.0f) return 0.0f;
+    int n = (int)x; float f = x - (float)n;
+    float t = 1.0f - f * (1.0f - f * (0.5f - f * (0.16666667f - f * (0.04166667f - f * 0.00833333f))));
+    return en[n] * t;
+}
+
+__attribute__((used)) void pw_push(void *cmd, void *layout, uint32_t stages, uint32_t offset, uint32_t size, const void *values)
+{
+    if (offset == 0 && size >= 128u && values) {
+        const float *f = (const float *)values;
+        float pz = f[22];                                      /* DrawData.params.z: surface flags + 1 */
+        if (pz > 0.5f && pz < 4096.0f) {
+            uint32_t flags = (uint32_t)(pz + 0.5f) - 1u;
+            float sc = fsqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+            if (!(flags & 8u) && sc > 0.0f && (g.cscale == 0.0f || sc < g.cscale)) {
+                for (int i = 0; i < 16; i++) g.cmodel[i] = f[i];
+                g.cscale = sc; g.cflags = flags;
+            }
+        }
+    }
+    PushFn real = *(PushFn *)(image_base() + RVA_VK_PUSH);
+    real(cmd, layout, stages, offset, size, values);
+}
+
+/* called from the renderer just before the frame's uniforms go to the GPU */
+__attribute__((used)) void pw_frame(float *fr)
+{
+    for (int i = 0; i < 16; i++) g.vp[i] = fr[32 + i];
+    for (int i = 0; i < 3; i++) { g.cam[i] = fr[64 + i]; g.right[i] = fr[68 + i]; g.up[i] = fr[72 + i]; }
+    if (g.cscale > 0.0f) { for (int i = 0; i < 16; i++) g.model[i] = g.cmodel[i]; g.flags = g.cflags; g.have = 1; }
+    else g.have = 0;
+    g.cscale = 0.0f;
+    if (g.tick > 0) g.tick--; else { g.sel = 0; g.hover = 0; }
+    fr[0x1dc / 4] = (float)g.hover;                            /* frame.air.w */
+    fr[0x1ec / 4] = (float)g.sel;                              /* frame.airTint.w */
+}
+
+__asm__(
+    ".text\n.globl pw_frame_stub\npw_frame_stub:\n"
+    "  pushq %rax\n  pushq %rcx\n  pushq %r8\n  pushq %r9\n  pushq %r10\n  pushq %r11\n"
+    "  subq $0x88, %rsp\n"
+    "  movups %xmm0, 0x28(%rsp)\n  movups %xmm1, 0x38(%rsp)\n  movups %xmm2, 0x48(%rsp)\n"
+    "  movups %xmm3, 0x58(%rsp)\n  movups %xmm4, 0x68(%rsp)\n  movups %xmm5, 0x78(%rsp)\n"
+    "  leaq 0x450(%rsp), %rcx\n"
+    "  call pw_frame\n"
+    "  movups 0x28(%rsp), %xmm0\n  movups 0x38(%rsp), %xmm1\n  movups 0x48(%rsp), %xmm2\n"
+    "  movups 0x58(%rsp), %xmm3\n  movups 0x68(%rsp), %xmm4\n  movups 0x78(%rsp), %xmm5\n"
+    "  addq $0x88, %rsp\n"
+    "  popq %r11\n  popq %r10\n  popq %r9\n  popq %r8\n  popq %rcx\n  popq %rax\n"
+    "  movq 0x580(%rsp), %rdx\n"
+    "  ret\n");
+
+static int project(float x, float y, float z, float W, float H, float *sx, float *sy)
+{
+    const float *m = g.vp;
+    float cx = m[0] * x + m[4] * y + m[8] * z + m[12];
+    float cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+    float cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+    if (cw <= 1e-6f) return 0;
+    *sx = (cx / cw * 0.5f + 0.5f) * W; *sy = (cy / cw * 0.5f + 0.5f) * H;
+    return 1;
+}
+
+static int invert4(const float *m, float *o)
+{
+    float inv[16];
+    inv[0] = m[5]*m[10]*m[15]-m[5]*m[11]*m[14]-m[9]*m[6]*m[15]+m[9]*m[7]*m[14]+m[13]*m[6]*m[11]-m[13]*m[7]*m[10];
+    inv[4] = -m[4]*m[10]*m[15]+m[4]*m[11]*m[14]+m[8]*m[6]*m[15]-m[8]*m[7]*m[14]-m[12]*m[6]*m[11]+m[12]*m[7]*m[10];
+    inv[8] = m[4]*m[9]*m[15]-m[4]*m[11]*m[13]-m[8]*m[5]*m[15]+m[8]*m[7]*m[13]+m[12]*m[5]*m[11]-m[12]*m[7]*m[9];
+    inv[12] = -m[4]*m[9]*m[14]+m[4]*m[10]*m[13]+m[8]*m[5]*m[14]-m[8]*m[6]*m[13]-m[12]*m[5]*m[10]+m[12]*m[6]*m[9];
+    inv[1] = -m[1]*m[10]*m[15]+m[1]*m[11]*m[14]+m[9]*m[2]*m[15]-m[9]*m[3]*m[14]-m[13]*m[2]*m[11]+m[13]*m[3]*m[10];
+    inv[5] = m[0]*m[10]*m[15]-m[0]*m[11]*m[14]-m[8]*m[2]*m[15]+m[8]*m[3]*m[14]+m[12]*m[2]*m[11]-m[12]*m[3]*m[10];
+    inv[9] = -m[0]*m[9]*m[15]+m[0]*m[11]*m[13]+m[8]*m[1]*m[15]-m[8]*m[3]*m[13]-m[12]*m[1]*m[11]+m[12]*m[3]*m[9];
+    inv[13] = m[0]*m[9]*m[14]-m[0]*m[10]*m[13]-m[8]*m[1]*m[14]+m[8]*m[2]*m[13]+m[12]*m[1]*m[10]-m[12]*m[2]*m[9];
+    inv[2] = m[1]*m[6]*m[15]-m[1]*m[7]*m[14]-m[5]*m[2]*m[15]+m[5]*m[3]*m[14]+m[13]*m[2]*m[7]-m[13]*m[3]*m[6];
+    inv[6] = -m[0]*m[6]*m[15]+m[0]*m[7]*m[14]+m[4]*m[2]*m[15]-m[4]*m[3]*m[14]-m[12]*m[2]*m[7]+m[12]*m[3]*m[6];
+    inv[10] = m[0]*m[5]*m[15]-m[0]*m[7]*m[13]-m[4]*m[1]*m[15]+m[4]*m[3]*m[13]+m[12]*m[1]*m[7]-m[12]*m[3]*m[5];
+    inv[14] = -m[0]*m[5]*m[14]+m[0]*m[6]*m[13]+m[4]*m[1]*m[14]-m[4]*m[2]*m[13]-m[12]*m[1]*m[6]+m[12]*m[2]*m[5];
+    inv[3] = -m[1]*m[6]*m[11]+m[1]*m[7]*m[10]+m[5]*m[2]*m[11]-m[5]*m[3]*m[10]-m[9]*m[2]*m[7]+m[9]*m[3]*m[6];
+    inv[7] = m[0]*m[6]*m[11]-m[0]*m[7]*m[10]-m[4]*m[2]*m[11]+m[4]*m[3]*m[10]+m[8]*m[2]*m[7]-m[8]*m[3]*m[6];
+    inv[11] = -m[0]*m[5]*m[11]+m[0]*m[7]*m[9]+m[4]*m[1]*m[11]-m[4]*m[3]*m[9]-m[8]*m[1]*m[7]+m[8]*m[3]*m[5];
+    inv[15] = m[0]*m[5]*m[10]-m[0]*m[6]*m[9]-m[4]*m[1]*m[10]+m[4]*m[2]*m[9]+m[8]*m[1]*m[6]-m[8]*m[2]*m[5];
+    float det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+    if (det > -1e-20f && det < 1e-20f) return 0;
+    det = 1.0f / det;
+    for (int i = 0; i < 16; i++) o[i] = inv[i] * det;
+    return 1;
+}
+
+static void unproject(const float *inv, float nx, float ny, float nz, float *p)
+{
+    float x = inv[0] * nx + inv[4] * ny + inv[8] * nz + inv[12];
+    float y = inv[1] * nx + inv[5] * ny + inv[9] * nz + inv[13];
+    float z = inv[2] * nx + inv[6] * ny + inv[10] * nz + inv[14];
+    float w = inv[3] * nx + inv[7] * ny + inv[11] * nz + inv[15];
+    p[0] = x / w; p[1] = y / w; p[2] = z / w;
+}
+
+/* the people holding a point of the globe (unit vector), by the same seed model as the map */
+static uint32_t people_at(float x, float y, float z, uint32_t body, float *bestOut)
+{
+    static float acc[PW_NPEOPLE];
+    for (uint32_t i = 0; i < PW_NPEOPLE; i++) acc[i] = 0.0f;
+    for (uint32_t i = 0; i < PW_NSEED; i++) {
+        const PwSeed *s = &PW_SEED[i];
+        if (s->body != body) continue;
+        float xx = 2.0f * (1.0f - (s->x * x + s->y * y + s->z * z)) * s->k;
+        if (xx < 9.0f) acc[s->g] += s->w * fexpn(xx);
+    }
+    uint32_t best = 0xFFFFFFFFu; float bv = 0.0f;
+    for (uint32_t i = 0; i < PW_NPEOPLE; i++) if (acc[i] > bv) { bv = acc[i]; best = i; }
+    *bestOut = bv;
+    return best;
+}
+
+/* every frame in the planet view, before its panels: people names on the globe, and the people under
+   the mouse (a tooltip, and its land lit up on the map) */
+__attribute__((used)) void pw_ui(void *a, void *ui, void *c, char *L)
+{
+    char *B = image_base();
+    uint32_t selPrev = g.sel;
+    g.sel = 0;                                                 /* the People window sets it again below */
+    if (*(int32_t *)(L + 0xc0) == 1 && g.have) {
+        g.tick = 3;
+        TextFn t = (TextFn)(B + RVA_TEXT);
+        FillFn fill = (FillFn)(B + RVA_FILL);
+        float cw = *(float *)ui, ch = *(float *)((char *)ui + 4);
+        if (cw < 4.0f || cw > 40.0f) cw = 8.0f;
+        if (ch < 8.0f || ch > 60.0f) ch = 14.0f;
+        float W = *(float *)L, H = *(float *)(L + 4);
+        float cx = g.model[12], cy = g.model[13], cz = g.model[14];
+        float R = fsqrt(g.model[0] * g.model[0] + g.model[1] * g.model[1] + g.model[2] * g.model[2]);
+        uint32_t body = (g.flags & 32u) ? 0u : 1u;
+        float dx = g.cam[0] - cx, dy = g.cam[1] - cy, dz = g.cam[2] - cz;
+        float dist = fsqrt(dx * dx + dy * dy + dz * dz);
+        float hgt = dist / R - 1.0f;
+        uint32_t nshow = hgt > 3.0f ? 18u : hgt > 1.6f ? 40u : hgt > 0.9f ? 90u : hgt > 0.45f ? 200u : PW_NANCHOR;
+        float shadow[4] = { 0.0f, 0.0f, 0.0f, 0.85f };
+        float ink[4] = { 0.96f, 0.95f, 0.90f, 0.95f };
+        float rects[160][4]; uint32_t nr = 0, shown = 0;
+        for (uint32_t i = 0; i < PW_NANCHOR && shown < nshow && nr < 160; i++) {
+            const PwAnchor *A = &PW_ANCHOR[i];
+            if (A->body != body) continue;
+            shown++;
+            float px = cx + A->x * R, py = cy + A->y * R, pz = cz + A->z * R;
+            float vx = g.cam[0] - px, vy = g.cam[1] - py, vz = g.cam[2] - pz;
+            float vl = fsqrt(vx * vx + vy * vy + vz * vz);
+            if ((A->x * vx + A->y * vy + A->z * vz) / vl < 0.25f) continue;   /* on the far side */
+            float sx, sy;
+            if (!project(px, py, pz, W, H, &sx, &sy)) continue;
+            const char *nm = str(PW_PEOPLE[A->who].shortname);
+            uint32_t n = slen(nm);
+            float tw = cw * (float)n, x0 = sx - tw * 0.5f, y0 = sy - ch * 0.5f;
+            if (x0 < 4.0f || y0 < 30.0f || x0 + tw > W - 4.0f || y0 + ch > H - 40.0f) continue;
+            int clash = 0;
+            for (uint32_t k = 0; k < nr; k++)
+                if (x0 < rects[k][2] + 6.0f && rects[k][0] < x0 + tw + 6.0f && y0 < rects[k][3] + 3.0f && rects[k][1] < y0 + ch + 3.0f) { clash = 1; break; }
+            if (clash) continue;
+            rects[nr][0] = x0; rects[nr][1] = y0; rects[nr][2] = x0 + tw; rects[nr][3] = y0 + ch; nr++;
+            text(t, ui, x0 + 1.0f, y0 + 1.0f, nm, n, shadow);
+            text(t, ui, x0, y0, nm, n, ink);
+        }
+        /* find on map: the people open in the window is marked at its homeland, or by an arrow at the
+           screen's edge pointing the way when it is out of sight */
+        if (selPrev > 0u) {
+            for (uint32_t i = 0; i < PW_NANCHOR; i++) {
+                const PwAnchor *A = &PW_ANCHOR[i];
+                if (A->who != selPrev - 1u || A->body != body) continue;
+                float px = cx + A->x * R, py = cy + A->y * R, pz = cz + A->z * R;
+                float vx = g.cam[0] - px, vy = g.cam[1] - py, vz = g.cam[2] - pz;
+                float vl = fsqrt(vx * vx + vy * vy + vz * vz);
+                const char *nm = str(PW_PEOPLE[A->who].shortname);
+                uint32_t n = slen(nm);
+                float sx, sy, mk[4];
+                colour_of(PW_PEOPLE[A->who].colour, 1.0f, mk);
+                int facing = (A->x * vx + A->y * vy + A->z * vz) / vl > 0.05f;
+                if (facing && project(px, py, pz, W, H, &sx, &sy) && sx > 20.0f && sy > 40.0f && sx < W - 20.0f && sy < H - 60.0f) {
+                    Rect r1 = { sx - 9.0f, sy - 9.0f, 18.0f, 18.0f }, r2 = { sx - 6.0f, sy - 6.0f, 12.0f, 12.0f };
+                    fill(ui, &r1, shadow); fill(ui, &r2, mk);
+                    text(t, ui, sx + 13.0f, sy - ch - 2.0f, nm, n, shadow);
+                    text(t, ui, sx + 12.0f, sy - ch - 3.0f, nm, n, ink);
+                } else {
+                    float rx = (px - g.cam[0]) * g.right[0] + (py - g.cam[1]) * g.right[1] + (pz - g.cam[2]) * g.right[2];
+                    float ry = (px - g.cam[0]) * g.up[0] + (py - g.cam[1]) * g.up[1] + (pz - g.cam[2]) * g.up[2];
+                    if (!facing) { rx = A->x * g.right[0] + A->y * g.right[1] + A->z * g.right[2];   /* round the back: */
+                                   ry = A->x * g.up[0] + A->y * g.up[1] + A->z * g.up[2]; }      /* which way to turn */
+                    float l2 = fsqrt(rx * rx + ry * ry); if (l2 < 1e-6f) { rx = 1.0f; ry = 0.0f; l2 = 1.0f; }
+                    rx /= l2; ry /= l2;
+                    float ex = W * 0.5f + rx * W * 0.42f, ey = H * 0.5f - ry * H * 0.40f;
+                    char lab[72]; uint32_t k = 0;
+                    char arrow = (rx > 0.7f) ? '>' : (rx < -0.7f) ? '<' : (ry > 0.0f ? '^' : 'v');
+                    lab[k++] = arrow; lab[k++] = arrow; lab[k++] = ' ';
+                    for (uint32_t j = 0; j < n && k < 70; j++) lab[k++] = nm[j];
+                    float tw = cw * (float)k;
+                    Rect rb = { ex - tw * 0.5f - 6.0f, ey - 4.0f, tw + 12.0f, ch + 8.0f };
+                    float bg[4] = { 0.02f, 0.03f, 0.05f, 0.82f };
+                    fill(ui, &rb, bg);
+                    Rect bar = { rb.x, rb.y + rb.h - 2.0f, rb.w, 2.0f };
+                    fill(ui, &bar, mk);
+                    text(t, ui, ex - tw * 0.5f, ey, lab, k, ink);
+                }
+                break;
+            }
+        }
+        /* the mouse: a ray from the eye through the cursor, onto the globe */
+        float mx = *(float *)((char *)ui + 0x38), my = *(float *)((char *)ui + 0x3c);
+        float inv[16]; g.hover = 0;
+        if (mx >= 0.0f && my >= 0.0f && mx < W && my < H && invert4(g.vp, inv)) {
+            float p0[3], p1[3];
+            float nx = mx / W * 2.0f - 1.0f, ny = my / H * 2.0f - 1.0f;
+            unproject(inv, nx, ny, 0.0f, p0); unproject(inv, nx, ny, 1.0f, p1);
+            float d[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
+            float dl = fsqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            d[0] /= dl; d[1] /= dl; d[2] /= dl;
+            float o[3] = { p0[0] - cx, p0[1] - cy, p0[2] - cz };
+            float b = o[0] * d[0] + o[1] * d[1] + o[2] * d[2];
+            float cc = o[0] * o[0] + o[1] * o[1] + o[2] * o[2] - R * R;
+            float disc = b * b - cc;
+            if (disc > 0.0f) {
+                float sq = fsqrt(disc);
+                float tt = -b - sq; if (tt < 0.0f) tt = -b + sq;
+                if (tt > 0.0f) {
+                    float hx = (o[0] + d[0] * tt) / R, hy = (o[1] + d[1] * tt) / R, hz = (o[2] + d[2] * tt) / R;
+                    float score;
+                    uint32_t who = people_at(hx, hy, hz, body, &score);
+                    if (who != 0xFFFFFFFFu && score > 0.12f) {
+                        g.hover = who + 1u;
+                        const char *nm = str(PW_PEOPLE[who].name);
+                        uint32_t n = slen(nm);
+                        float bx = mx + 16.0f, by = my + 16.0f, bw2 = cw * (float)n + 22.0f;
+                        if (bx + bw2 > W) bx = mx - 16.0f - bw2;
+                        float bg[4] = { 0.02f, 0.03f, 0.05f, 0.82f }, sw[4];
+                        Rect rb = { bx, by, bw2, ch + 8.0f };
+                        fill(ui, &rb, bg);
+                        colour_of(PW_PEOPLE[who].colour, 1.0f, sw);
+                        Rect sq2 = { bx + 4.0f, by + 4.0f, 8.0f, ch };
+                        fill(ui, &sq2, sw);
+                        text(t, ui, bx + 16.0f, by + 4.0f, nm, n, ink);
+                    }
+                }
+            }
+        }
+    }
+    ((PlanetUiFn)(B + RVA_PLANET_UI))(a, ui, c, L);
+}
 static const char *lit(const char *p) { __asm__("" : "+r"(p)); return p; }   /* no absolute pointers in data */
 
 static int btn(ButtonFn button, void *ui, float x, float y, float w, float h, const char *label)
@@ -193,6 +457,7 @@ __attribute__((used)) void pw_hook(void *ui, void *view, char *L, void *r9)
     if (st.tab >= ntab) st.tab = 0;
 
     const PwPeople *G = st.mode == 1 ? 0 : &PW_PEOPLE[st.mode == 2 ? st.person : P->who[st.tab]];
+    g.sel = G ? (uint32_t)(G - PW_PEOPLE) + 1u : 0u;
     Rect r = { px, py, pw, ph }, c;
     const char *ttl = G ? str(G->name) : lit("Peoples of 2240, A to Z");
     SV title = { slen(ttl), ttl };

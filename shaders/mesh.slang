@@ -578,9 +578,10 @@ float seedScoreEll(float3 q, float3 c, float w, float invR2, float3 axis, float 
 // (strength, reach); the strongest people at a point holds it. Zones get natural curved borders that
 // ignore province lines, small peoples form enclaves, fusion peoples rise around bright city lights.
 // regionG: the engine's region at this texel (picks the short list of peoples that matter here).
-float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out float mixed)
+float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out float mixed, out uint people)
 {
     mixed = 0.0;
+    people = 0xFFFFu;
     int r = int(floor(regionG * 255.0 + 0.5)) - 128;
     uint nreg = earth ? EARTH_REGIONS : MARS_REGIONS;
     if (r < 0 || uint(r) >= nreg)
@@ -634,6 +635,7 @@ float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out
     float3 empty = float3(0.46, 0.44, 0.40);
     if (best <= 0.0)
         return empty;
+    people = gb;
     // Smooth, anti-aliased edge where two zones meet; up close a thin ink line along it.
     float gap = log(best / max(second, 1e-5));
     // 0.1.22: ragged, interfingering borders. Each people pushes its edge out and in along its own noise;
@@ -738,7 +740,8 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
         float2 duv = fwidth(input.uv) * float2(360.0 * cos(radians(lat)), 180.0);
         float fw = max(max(duv.x, duv.y), 1e-4);
         float4 pdN = dataTexture.Load(int3(int2(clamp(input.uv, 0.0, 0.9999) * float2(dataDims())), 0));
-        float3 pc = peoplesAt(up, pdN.g, (surfaceFlags() & 32u) != 0u, smoothstep(0.05, 0.6, ul), fw, mixed);
+        uint who;
+        float3 pc = peoplesAt(up, pdN.g, (surfaceFlags() & 32u) != 0u, smoothstep(0.05, 0.6, ul), fw, mixed, who);
         // Gentler colours: a touch less saturated, so a map of hundreds of peoples stays easy on the eye.
         float pl = dot(pc, float3(0.299, 0.587, 0.114));
         pc = lerp(float3(pl, pl, pl), pc, 0.86);
@@ -757,6 +760,13 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
             float stripe = 1.0 - smoothstep(0.6, 1.6, hl);
             float mixZone = smoothstep(0.45, 0.8, mixed);
             S *= 1.0 - 0.38 * stripe * mixZone * zin;
+            // 0.1.26: the people under the mouse lights up and the rest dim a little; the people open
+            // in the People window pulses (both written into the frame by the game's patched code).
+            uint hov = uint(max(frame.air.w, 0.0) + 0.5), sel = uint(max(frame.airTint.w, 0.0) + 0.5);
+            if (hov > 0u && hov < 600u)
+                S = (who + 1u == hov) ? S * 1.5 + 0.015 : S * 0.78;
+            if (sel > 0u && sel < 600u && who + 1u == sel)
+                S = lerp(S, S * 1.7 + 0.03, 0.35 + 0.35 * sin(time * 3.2));
         }
         lineP = float3(0.03, 0.03, 0.035); lineC = float3(0.004, 0.004, 0.006); coastC = float3(0.30, 0.42, 0.52) * 0.7;
         grid = float3(0.5, 0.5, 0.5); gridA = 0.0; riverC = float3(0.05, 0.10, 0.16); glowC = float3(1.0, 1.0, 1.0);
