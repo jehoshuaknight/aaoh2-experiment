@@ -40,21 +40,21 @@ def render(lon0,lon1,lat1,lat0,fw,name):
     R_=np.array([reg.get(int(p),-1) for p in pid.ravel()]).reshape(pid.shape)
     lr,ln=np.radians(LAT),np.radians(LON); up=np.stack([np.cos(lr)*np.cos(ln),np.sin(lr),-np.cos(lr)*np.sin(ln)],-1)
     east=np.cross(np.array([0,1,0.]),up); east/=np.linalg.norm(east,axis=-1,keepdims=True); north=np.cross(up,east)
-    wq=np.stack([aao(up,0.05,fw,11)+0.5*aao(up,0.14,fw,5), aao(up,0.05,fw,23)+0.5*aao(up,0.14,fw,9)],-1)-0.75
-    wf=np.stack([aao(up,0.45,fw,31)+0.5*aao(up,1.2,fw,41), aao(up,0.45,fw,37)+0.5*aao(up,1.2,fw,43)],-1)-0.75
-    p=up+(east*wq[...,0:1]+north*wq[...,1:2])*0.085+(east*wf[...,0:1]+north*wf[...,1:2])*0.016; p/=np.linalg.norm(p,axis=-1,keepdims=True)
+    wq=np.stack([aao(up,0.06,fw,11), aao(up,0.06,fw,23)],-1)-0.5
+    wf=np.stack([aao(up,0.45,fw,31), aao(up,0.45,fw,37)],-1)-0.5
+    p=up+(east*wq[...,0:1]+north*wq[...,1:2])*0.13+(east*wf[...,0:1]+north*wf[...,1:2])*0.022; p/=np.linalg.norm(p,axis=-1,keepdims=True)
     city=ss(0.05,0.6,np.clip((lights[py,px]-0.0)*1.0,0,1))
     out=np.zeros(LAT.shape+(3,),np.float32)
     for r in np.unique(R_):
         if r<0: continue
         m=(R_==r)&~water; s,e=rng[r]; E=ent[s:e]; P=p[m]; C=city[m]
-        g=E[:,0]>>22; la=np.radians((E[:,0]&1023)/1023*180-90); lo=np.radians(((E[:,0]>>10)&2047)/2047*360-180)
-        cvec=np.stack([np.cos(la)*np.cos(lo),np.sin(la),-np.cos(la)*np.sin(lo)],-1)
-        w=(E[:,1]&255)/32; rad=((E[:,1]>>8)&255)/8; urb=((E[:,0]>>21)&1)==1
-        dW=np.degrees(np.arccos(np.clip(P@cvec.T,-1,1))); d0=np.degrees(np.arccos(np.clip(up[m]@cvec.T,-1,1)))
-        d=np.where((rad>2.5)[None,:],dW,d0)
+        g=(E[:,1]>>16)&511
+        cvec=np.stack([(E[:,0]&1023),((E[:,0]>>10)&1023),((E[:,0]>>20)&1023)],-1)/511.5-1.0; cvec/=np.linalg.norm(cvec,axis=-1,keepdims=True)
+        w=(E[:,1]&255)/32; rad=((E[:,1]>>8)&255)/8; urb=((E[:,1]>>25)&1)==1
+        xW=2*(1-P@cvec.T)*3282.806/(rad**2)[None,:]; x0=2*(1-up[m]@cvec.T)*3282.806/(rad**2)[None,:]
+        xx=np.where((rad>2.5)[None,:],xW,x0)
         W_=np.where(urb[None,:], w[None,:]*(0.45+2.2*C[:,None]), w[None,:])
-        contrib=W_*np.exp(-(d/rad)**2)
+        contrib=np.where(xx<9,W_*np.exp(-xx),0)
         ug=np.unique(g); sc=np.stack([contrib[:,g==k].sum(1) for k in ug],1)
         o=np.argsort(-sc,1); best=np.take_along_axis(sc,o[:,:1],1)[:,0]; second=np.take_along_axis(sc,o[:,1:2],1)[:,0] if sc.shape[1]>1 else np.zeros_like(best)
         gb=ug[o[:,0]]; gs=ug[o[:,1]] if sc.shape[1]>1 else gb

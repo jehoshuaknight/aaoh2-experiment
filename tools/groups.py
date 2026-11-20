@@ -225,5 +225,10 @@ MANUAL_CORES = {
     'pahari': [(31.1, 77.2, 4.0, 0.6)],           # Shimla
     'rohingya': [(21.2, 92.8, 3.5, 0.45)],        # hills above the drowned Arakan coast
     'salar_dongxiang': [(35.85, 102.5, 4.0, 0.5)],  # Xunhua
+    'latvian': [(57.54, 25.43, 4.5, 0.7)],         # Valmiera
+    'f_steppehan': [(40.84, 111.75, 4.5, 0.5)],    # Hohhot
+    'mon': [(16.89, 97.63, 4.5, 0.5)],             # Hpa-an
+    'mbundu': [(-9.54, 16.34, 4.5, 0.6)],          # Malanje
+    'pedi': [(-23.9, 29.45, 4.5, 0.6)],            # Polokwane
 }
 EARTH = [(k, n, fam, note, list(seeds) + list(MANUAL_CORES.get(k, []))) for k, n, fam, note, seeds in EARTH]

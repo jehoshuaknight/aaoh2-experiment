@@ -46,7 +46,7 @@ def scores_at(st, la, lo):
     out = {}
     for kk, v in zip(K, contrib): out[kk] = out.get(kk, 0.0) + v
     return out, c
-def wins(st, k, la, lo, margin=1.15):
+def wins(st, k, la, lo, margin=1.35):
     sc, _ = scores_at(st, la, lo); own = sc.get(k, 0.0); other = max([v for kk, v in sc.items() if kk != k] or [0])
     return own > other * margin
 for it in range(9):
@@ -72,7 +72,7 @@ for it in range(9):
         for la, lo in cands:
             sc, c = scores_at(st, la, lo); own = sc.get(k, 0.0); other = max([v for kk, v in sc.items() if kk != k] or [0])
             boost = (0.45 + 2.2 * c) if k in groups.FUSION_PARENTS else 1.0
-            need = max(0.0, other * 1.6 - own) / boost
+            need = max(0.0, other * 1.9 - own) / boost
             if best is None or need < best[0]: best = (need, la, lo)
         if best is None: continue
         need, la, lo = best

@@ -504,6 +504,8 @@ float ethNoise3(float3 p)
 float aaOct(float3 up, float f, float fw, float seed)
 {
     float k = saturate(1.0 - (fw * f - 0.2) / 0.3);
+    if (k <= 0.0)
+        return 0.5;   // too fine to see at this zoom: skip the noise (0.1.20, speed)
     float3 off = float3(frac(seed * 0.618), frac(seed * 0.377), frac(seed * 0.271)) * 97.0;
     return lerp(0.5, ethNoise3(up * (57.29578 * f) + off), k);
 }
@@ -537,6 +539,14 @@ void ethTake(uint g, float acc, inout float best, inout float second, inout uint
     else if (acc > second) { second = acc; gs = g; }
 }
 
+// One homeland seed's pull at a point (0.1.20): squared chord distance in degrees (no acos), and no exp()
+// beyond three reaches, where the pull is negligible.
+float seedScore(float3 q, float3 c, float w, float invR2)
+{
+    float x = 2.0 * (1.0 - dot(q, c)) * 3282.806 * invR2;
+    return x < 9.0 ? w * exp(-x) : 0.0;
+}
+
 // The colour of the people at a point (display values), and how mixed the place is (0..1).
 // Ethnographic map (0.1.14): the generating model itself. Every people is a set of homeland seeds
 // (strength, reach); the strongest people at a point holds it. Zones get natural curved borders that
@@ -549,35 +559,34 @@ float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out
     uint nreg = earth ? EARTH_REGIONS : MARS_REGIONS;
     if (r < 0 || uint(r) >= nreg)
         return float3(0.45, 0.43, 0.40);
-    uint2 rr = seedRange(uint(r) + (earth ? 0u : EARTH_REGIONS));
-    // A slow wobble (about 2 degrees) so zone borders wander like real ones, never perfect arcs.
+    // A slow wobble so zone borders wander like real ones, never perfect arcs (four noise samples).
     float3 eastV = normalize(cross(float3(0.0, 1.0, 0.0), up) + float3(1e-5, 0.0, 0.0));
     float3 northV = cross(up, eastV);
-    float2 wq = float2(aaOct(up, 0.05, fw, 11.0) + 0.5 * aaOct(up, 0.14, fw, 5.0), aaOct(up, 0.05, fw, 23.0) + 0.5 * aaOct(up, 0.14, fw, 9.0)) - 0.75;
-    float2 wf = float2(aaOct(up, 0.45, fw, 31.0) + 0.5 * aaOct(up, 1.2, fw, 41.0), aaOct(up, 0.45, fw, 37.0) + 0.5 * aaOct(up, 1.2, fw, 43.0)) - 0.75;
-    float3 p = normalize(up + (eastV * wq.x + northV * wq.y) * 0.085 + (eastV * wf.x + northV * wf.y) * 0.016);
-    float best = 0.0, second = 0.0, acc = 0.0;
-    uint gb = 0u, gs = 0u, cur = 0xFFFFu;
+    float2 wq = float2(aaOct(up, 0.06, fw, 11.0), aaOct(up, 0.06, fw, 23.0)) - 0.5;
+    float2 wf = float2(aaOct(up, 0.45, fw, 31.0), aaOct(up, 0.45, fw, 37.0)) - 0.5;
+    float3 p = normalize(up + (eastV * wq.x + northV * wq.y) * 0.13 + (eastV * wf.x + northV * wf.y) * 0.022);
+    float best = 0.0, second = 0.0;
+    uint gb = 0u, gs = 0u;
+    float urbanMul = 0.45 + 2.2 * city;
+    uint2 rr = seedRange(uint(r) + (earth ? 0u : EARTH_REGIONS));
+    float acc = 0.0;
+    uint cur = 0xFFFFu;
     for (uint i = rr.x; i < rr.y && i < rr.x + 160u; i++)
     {
         uint2 e = seedEntry(i);
-        uint g = e.x >> 22;
+        uint g = (e.y >> 16) & 511u;
         if (g != cur)
         {
             if (cur != 0xFFFFu) ethTake(cur, acc, best, second, gb, gs);
             cur = g; acc = 0.0;
         }
-        float lat = radians(float(e.x & 1023u) / 1023.0 * 180.0 - 90.0);
-        float lon = radians(float((e.x >> 10) & 2047u) / 2047.0 * 360.0 - 180.0);
-        float3 c = float3(cos(lat) * cos(lon), sin(lat), -cos(lat) * sin(lon));
-        float w = float(e.y & 255u) / 32.0;
+        float3 c = normalize(float3(float(e.x & 1023u), float((e.x >> 10) & 1023u), float((e.x >> 20) & 1023u)) / 511.5 - 1.0);
         float rad = float((e.y >> 8) & 255u) / 8.0;
+        float w = float(e.y & 255u) / 32.0;
+        if (((e.y >> 25) & 1u) != 0u)
+            w *= urbanMul;
         // Big zones wander (warped point); small enclaves stay exactly where their people live.
-        float d = degrees(acos(clamp(dot(rad > 2.5 ? p : up, c), -1.0, 1.0)));
-        if (((e.x >> 21) & 1u) != 0u)
-            w *= 0.45 + 2.2 * city;
-        float q = d / rad;
-        acc += w * exp(-q * q);
+        acc += seedScore(rad > 2.5 ? p : up, c, w, 1.0 / (rad * rad));
     }
     if (cur != 0xFFFFu) ethTake(cur, acc, best, second, gb, gs);
     float3 empty = float3(0.46, 0.44, 0.40);
