@@ -552,7 +552,7 @@ float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out
     float3 p = normalize(up + (eastV * wq.x + northV * wq.y) * 0.085 + (eastV * wf.x + northV * wf.y) * 0.016);
     float best = 0.0, second = 0.0, acc = 0.0;
     uint gb = 0u, gs = 0u, cur = 0xFFFFu;
-    for (uint i = rr.x; i < rr.y && i < rr.x + 128u; i++)
+    for (uint i = rr.x; i < rr.y && i < rr.x + 160u; i++)
     {
         uint2 e = seedEntry(i);
         uint g = e.x >> 22;
@@ -564,9 +564,10 @@ float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out
         float lat = radians(float(e.x & 1023u) / 1023.0 * 180.0 - 90.0);
         float lon = radians(float((e.x >> 10) & 2047u) / 2047.0 * 360.0 - 180.0);
         float3 c = float3(cos(lat) * cos(lon), sin(lat), -cos(lat) * sin(lon));
-        float d = degrees(acos(clamp(dot(p, c), -1.0, 1.0)));
         float w = float(e.y & 255u) / 32.0;
         float rad = float((e.y >> 8) & 255u) / 8.0;
+        // Big zones wander (warped point); small enclaves stay exactly where their people live.
+        float d = degrees(acos(clamp(dot(rad > 2.5 ? p : up, c), -1.0, 1.0)));
         if (((e.x >> 21) & 1u) != 0u)
             w *= 0.45 + 2.2 * city;
         float q = d / rad;

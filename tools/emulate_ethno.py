@@ -50,8 +50,9 @@ def render(lon0,lon1,lat1,lat0,fw,name):
         m=(R_==r)&~water; s,e=rng[r]; E=ent[s:e]; P=p[m]; C=city[m]
         g=E[:,0]>>22; la=np.radians((E[:,0]&1023)/1023*180-90); lo=np.radians(((E[:,0]>>10)&2047)/2047*360-180)
         cvec=np.stack([np.cos(la)*np.cos(lo),np.sin(la),-np.cos(la)*np.sin(lo)],-1)
-        d=np.degrees(np.arccos(np.clip(P@cvec.T,-1,1)))
         w=(E[:,1]&255)/32; rad=((E[:,1]>>8)&255)/8; urb=((E[:,0]>>21)&1)==1
+        dW=np.degrees(np.arccos(np.clip(P@cvec.T,-1,1))); d0=np.degrees(np.arccos(np.clip(up[m]@cvec.T,-1,1)))
+        d=np.where((rad>2.5)[None,:],dW,d0)
         W_=np.where(urb[None,:], w[None,:]*(0.45+2.2*C[:,None]), w[None,:])
         contrib=W_*np.exp(-(d/rad)**2)
         ug=np.unique(g); sc=np.stack([contrib[:,g==k].sum(1) for k in ug],1)

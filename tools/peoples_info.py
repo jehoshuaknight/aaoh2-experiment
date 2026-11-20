@@ -201,3 +201,6 @@ INFO = {
  'm_boreal': ('Boreal Coast speech', 'Secular, sea cults'),
  'm_austral': ('Southern Highland speech (Russian and English roots)', 'Orthodox, secular'),
 }
+
+from groups_500 import INFO_500
+INFO.update(INFO_500)

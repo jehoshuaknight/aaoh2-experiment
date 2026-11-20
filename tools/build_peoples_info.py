@@ -9,7 +9,7 @@ from peoples_info import INFO
 from groups_fusion import FUSION
 
 A = sys.argv[1]; D = os.path.join(A, 'bin/game/data')
-PARENTS = {f[0]: f[5] for f in FUSION}
+from groups import FUSION_PARENTS as PARENTS
 TOTAL = {'earth': 8.6e9, 'mars': 410e6}
 
 def tsv(p):

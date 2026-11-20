@@ -61,7 +61,12 @@ def body(name, groups, nreg_expected=None):
         for _ in range(6):
             mm = mm | np.roll(mm, 1, 0) | np.roll(mm, -1, 0) | np.roll(mm, 1, 1) | np.roll(mm, -1, 1)
         winners = set(np.unique(rank[:, mm])) if mm.any() else set()
-        ks = sorted((G[i] for i in winners), key=lambda k: index[k])[:24]
+        # plus every people with a seed (homeland or core) in or near the region, so enclaves always draw
+        for k, la, lo, w, rr in seeds:
+            y = min(H - 1, max(0, int((90 - la) / 180 * H))); x = min(W - 1, max(0, int((lo + 180) / 360 * W)))
+            if mm[y, x]:
+                winners.add(gi[k])
+        ks = sorted((G[i] for i in winners), key=lambda k: index[k])[:96]
         start.append(len(out))
         for k, la, lo, w, rr in seeds:
             if k in ks:

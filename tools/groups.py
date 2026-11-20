@@ -206,3 +206,24 @@ EARTH = EARTH + EARTH_MORE
 from groups_fusion import FUSION
 EARTH = EARTH + [f[:5] for f in FUSION]
 FUSION_PARENTS = {f[0]: f[5] for f in FUSION}
+
+# 0.1.15: Earth grows to 500 peoples.
+from groups_500 import E500, FUSION_500
+EARTH = EARTH + E500 + [f[:5] for f in FUSION_500]
+FUSION_PARENTS.update({f[0]: f[5] for f in FUSION_500})
+
+# Cores from calibrate_visibility.py: every people holds at least an enclave at its homeland.
+try:
+    from groups_cores import CORES
+except ImportError:
+    CORES = {}
+EARTH = [(k, n, fam, note, list(seeds) + list(CORES.get(k, []))) for k, n, fam, note, seeds in EARTH]
+
+# Hand-placed cores (checked on the 2240 water map) for peoples squeezed out by stronger neighbours.
+MANUAL_CORES = {
+    'lithuanian': [(54.7, 25.3, 4.0, 0.7)],       # Vilnius
+    'pahari': [(31.1, 77.2, 4.0, 0.6)],           # Shimla
+    'rohingya': [(21.2, 92.8, 3.5, 0.45)],        # hills above the drowned Arakan coast
+    'salar_dongxiang': [(35.85, 102.5, 4.0, 0.5)],  # Xunhua
+}
+EARTH = [(k, n, fam, note, list(seeds) + list(MANUAL_CORES.get(k, []))) for k, n, fam, note, seeds in EARTH]
