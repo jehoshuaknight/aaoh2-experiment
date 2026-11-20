@@ -525,65 +525,53 @@ void ethPick(uint g, float sh, float3 up, float fw, float city, float planetSeed
 }
 
 // The colour of the people at a point (display values), and how mixed the place is (0..1).
-// provR / regionG: the engine's province data at this texel (r = province value, g = 128 + region).
-float3 peoplesAt(float3 up, float provR, float regionG, bool earth, float city, float fw, out float mixed)
+// Clean, cartographic look (0.1.13): every province is filled flat with its main people; a province
+// whose second people holds 25 % or more gets diagonal stripes of that people's colour (the Paradox
+// convention). provR / regionG: the engine's province data at this texel. stripe: 0..1 position across
+// a stripe period, stripeW: its screen footprint (for anti-aliasing and the far-zoom blend).
+float3 peoplesAt(float provR, float regionG, bool earth, float stripe, float stripeW, out float mixed)
 {
     mixed = 0.0;
     int r = int(floor(regionG * 255.0 + 0.5)) - 128;
     uint nreg = earth ? EARTH_REGIONS : MARS_REGIONS;
     if (r < 0 || uint(r) >= nreg)
         return float3(0.45, 0.43, 0.40);
-    uint2 range = regionRange(uint(r) + (earth ? 0u : EARTH_REGIONS));
-    uint s = range.x, e = range.y;
-    if (e <= s)
-        return float3(0.45, 0.43, 0.40);
-    // Exact province where the engine's province value is the id's low byte; otherwise the nearest
-    // centre (with a wandering split line). A wrong guess about the encoding only means the fallback.
+    uint rg = uint(r) + (earth ? 0u : EARTH_REGIONS);
+    uint2 range = regionRange(rg);
+    // The exact province, if the engine's province value is the id's low byte; otherwise the whole region
+    // is filled with the region's own mix (exact region borders, never a guessed split).
     uint r8 = uint(floor(provR * 255.0 + 0.5));
     int exact = -1;
-    float d1 = 9.0, d2 = 9.0;
-    uint i1 = s, i2 = s;
-    float3 eastV = normalize(cross(float3(0.0, 1.0, 0.0), up) + float3(1e-5, 0.0, 0.0));
-    float3 northV = cross(up, eastV);
-    float2 wq = float2(aaOct(up, 0.10, fw, 11.0) + 0.5 * aaOct(up, 0.27, fw, 5.0), aaOct(up, 0.10, fw, 23.0) + 0.5 * aaOct(up, 0.27, fw, 9.0)) - 0.75;
-    float3 upW = normalize(up + (eastV * wq.x + northV * wq.y) * 0.09);
-    for (uint i = s; i < e && i < s + 64u; i++)
+    for (uint i = range.x; i < range.y && i < range.x + 64u; i++)
     {
-        uint a = provinceCentre(i);
-        if (exact < 0 && ((a >> 21) & 255u) == r8)
-            exact = int(i);
-        float lat = radians(float(a & 1023u) / 1023.0 * 180.0 - 90.0);
-        float lon = radians(float((a >> 10) & 2047u) / 2047.0 * 360.0 - 180.0);
-        float3 c = float3(cos(lat) * cos(lon), sin(lat), -cos(lat) * sin(lon));
-        float d = 1.0 - dot(upW, c);
-        if (d < d1) { d2 = d1; i2 = i1; d1 = d; i1 = i; }
-        else if (d < d2) { d2 = d; i2 = i; }
+        if (((provinceCentre(i) >> 21) & 255u) == r8) { exact = int(i); break; }
     }
-    float edgeN = 0.6 * aaOct(up, 0.35, fw, 3.7) + 0.4 * aaOct(up, 1.0, fw, 8.1);
-    float t = (d2 - d1) / max(d2 + d1, 1e-6);
-    uint pi = exact >= 0 ? uint(exact) : ((e - s > 1u && t < 0.16 * edgeN) ? i2 : i1);
-    uint3 mx = provinceMix(pi);
-    float s1 = float((mx.y >> 16) & 127u) / 100.0, s2 = float((mx.x >> 18) & 127u) / 100.0, s3 = float((mx.y >> 9) & 127u) / 100.0;
-    float s4 = float((mx.z >> 9) & 127u) / 100.0, s5 = float((mx.z >> 25) & 127u) / 100.0;
-    uint g1 = mx.x & 511u, g2 = (mx.x >> 9) & 511u, g3 = mx.y & 511u, g4 = mx.z & 511u, g5 = (mx.z >> 16) & 511u;
-    // Each people competes with its own noise field, weighted by its share: natural blobs, no rings.
-    float best = -1e9, second = -1e9;
-    uint gb = g1, gs = g1;
-    float ps = earth ? 0.0 : 50.0;
-    ethPick(g1, s1, up, fw, city, ps, best, second, gb, gs);
-    ethPick(g2, s2, up, fw, city, ps, best, second, gb, gs);
-    ethPick(g3, s3, up, fw, city, ps, best, second, gb, gs);
-    ethPick(g4, s4, up, fw, city, ps, best, second, gb, gs);
-    ethPick(g5, s5, up, fw, city, ps, best, second, gb, gs);
-    // Soft edges between neighbouring peoples (half-and-half right on the edge), and up close a thin
-    // painted outline where two peoples meet, like the ink line of a hand-drawn ethnographic map.
-    float gap = best - second;
-    float k = second > -1e8 ? 0.5 * (1.0 - smoothstep(0.0, 0.22, gap)) : 0.0;
-    float3 col = lerp(ethColour(gb), ethColour(gs), k);
-    float ink = second > -1e8 ? (1.0 - smoothstep(0.0, 0.05, gap)) * (1.0 - smoothstep(0.03, 0.12, fw)) : 0.0;
-    col *= 1.0 - 0.28 * ink;
+    uint g1, g2;
+    float s1, s2;
+    if (exact >= 0)
+    {
+        uint3 mx = provinceMix(uint(exact));
+        g1 = mx.x & 511u; g2 = (mx.x >> 9) & 511u;
+        s1 = float((mx.y >> 16) & 127u) / 100.0; s2 = float((mx.x >> 18) & 127u) / 100.0;
+    }
+    else
+    {
+        uint2 rm = regionMix(rg);
+        g1 = rm.x & 511u; g2 = (rm.x >> 9) & 511u;
+        s1 = float(rm.y & 127u) / 100.0; s2 = float((rm.x >> 18) & 127u) / 100.0;
+    }
     mixed = 1.0 - s1;
-    return col;
+    float3 c1 = ethColour(g1);
+    if (s2 < 0.25 || g2 == g1)
+        return c1;
+    float3 c2 = ethColour(g2);
+    // Stripe width follows the minority's weight (a quarter to half of each period).
+    float f = clamp(s2 / max(s1 + s2, 1e-3), 0.25, 0.5);
+    float aa = max(stripeW, 1e-4);
+    float band = smoothstep(f - aa, f + aa, stripe) * (1.0 - smoothstep(1.0 - aa, 1.0, stripe));
+    float3 striped = lerp(c2, c1, band);
+    // Too far out to draw stripes cleanly: show the blend instead of shimmering lines.
+    return lerp(striped, lerp(c1, c2, f), smoothstep(0.18, 0.35, stripeW));
 }
 
 // Helios's map styles for a planet surface, from GlobeTerrain's globe shader (u_style branches).
@@ -652,7 +640,10 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
         float2 duv = fwidth(input.uv) * float2(360.0 * cos(radians(lat)), 180.0);
         float fw = max(max(duv.x, duv.y), 1e-4);
         float4 pdN = dataTexture.Load(int3(int2(clamp(input.uv, 0.0, 0.9999) * float2(dataDims())), 0));
-        float3 pc = peoplesAt(up, pdN.r, pdN.g, (surfaceFlags() & 32u) != 0u, smoothstep(0.05, 0.6, ul), fw, mixed);
+        // Diagonal stripes in map degrees (period 1.5 deg, which divides 360, so no seam at the date line).
+        float st = (input.uv.x * 360.0 - (90.0 - input.uv.y * 180.0)) / 1.5;
+        float stW = min(fwidth(st), 1.0);
+        float3 pc = peoplesAt(pdN.r, pdN.g, (surfaceFlags() & 32u) != 0u, frac(st), stW, mixed);
         // Gentler colours: a touch less saturated, so a map of hundreds of peoples stays easy on the eye.
         float pl = dot(pc, float3(0.299, 0.587, 0.114));
         pc = lerp(float3(pl, pl, pl), pc, 0.86);
