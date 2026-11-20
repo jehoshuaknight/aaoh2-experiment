@@ -151,7 +151,7 @@ EARTH = [
  # ---- Americas
  ("anglo_am","Anglo-Americans","Germanic","United States interior; northward shift into a warmer Canada and Alaska",
   [(40,-89,3,8),(35,-97,2.2,6),(42,-75,2,4),(34,-84,2,4),(44,-110,1.2,8),(46,-122,1.5,3),(39.7,-105,1.4,3),(36,-115,1,3)]),
- ("african_am","African Americans","Afro-American","American South, northern cities",[(32.5,-88,2.2,4),(34.5,-81,1.6,3),(41.9,-87.7,0.6,1.2),(42.3,-83,0.6,1),(40.7,-74,0.4,1.5)]),
+ ("african_am","African Americans","Afro-American","American South, northern cities",[(32.4,-87.5,3.4,2.6),(32.6,-84.2,3.0,2.0),(33.6,-80.8,2.8,1.8),(32.3,-90.5,2.8,1.8),(41.8,-87.6,1.8,0.6),(42.35,-83.1,1.8,0.5),(39.3,-76.6,1.5,0.6)]),
  ("canadian","Anglo-Canadians","Germanic","Ontario, Prairies, British Columbia; the new farm belt up to the Arctic Reach",[(44,-79.5,2,3),(50.5,-104,1.6,6),(53.5,-113.5,1.6,4),(49.5,-123,1.5,2.5),(57,-110,1,7)]),
  ("quebecois","Québécois","Romance","St Lawrence and the Laurentian north",[(46.8,-72,2.4,3.5),(49.5,-73,1.2,4)]),
  ("reacher","Reachers (Arctic Canadians)","2240 hybrid","New Canadians of the thawed north: Anglo, Québécois, South Asian, Filipino, Latin American and Inuit descent",[(62,-115,1.8,8),(58,-95,1.4,7),(64,-135,1.3,6),(68,-110,1.2,7),(66,-95,1.1,6),(69,-80,0.8,5)]),

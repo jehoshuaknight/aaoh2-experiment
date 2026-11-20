@@ -443,6 +443,7 @@ float regionGlowRadius()
 // between neighbours, and inside the province its peoples interleave in patches by their shares.
 // ------------------------------------------------------------------------------------------------
 #include "ethnicity_tables.slang"
+#include "ethnicity_seeds.slang"
 
 float3 ethColour(uint g)
 {
@@ -524,54 +525,68 @@ void ethPick(uint g, float sh, float3 up, float fw, float city, float planetSeed
     else if (sc > second) { second = sc; gs = g; }
 }
 
+void ethTake(uint g, float acc, inout float best, inout float second, inout uint gb, inout uint gs)
+{
+    if (acc > best) { second = best; gs = gb; best = acc; gb = g; }
+    else if (acc > second) { second = acc; gs = g; }
+}
+
 // The colour of the people at a point (display values), and how mixed the place is (0..1).
-// Clean, cartographic look (0.1.13): every province is filled flat with its main people; a province
-// whose second people holds 25 % or more gets diagonal stripes of that people's colour (the Paradox
-// convention). provR / regionG: the engine's province data at this texel. stripe: 0..1 position across
-// a stripe period, stripeW: its screen footprint (for anti-aliasing and the far-zoom blend).
-float3 peoplesAt(float provR, float regionG, bool earth, float stripe, float stripeW, out float mixed)
+// Ethnographic map (0.1.14): the generating model itself. Every people is a set of homeland seeds
+// (strength, reach); the strongest people at a point holds it. Zones get natural curved borders that
+// ignore province lines, small peoples form enclaves, fusion peoples rise around bright city lights.
+// regionG: the engine's region at this texel (picks the short list of peoples that matter here).
+float3 peoplesAt(float3 up, float regionG, bool earth, float city, float fw, out float mixed)
 {
     mixed = 0.0;
     int r = int(floor(regionG * 255.0 + 0.5)) - 128;
     uint nreg = earth ? EARTH_REGIONS : MARS_REGIONS;
     if (r < 0 || uint(r) >= nreg)
         return float3(0.45, 0.43, 0.40);
-    uint rg = uint(r) + (earth ? 0u : EARTH_REGIONS);
-    uint2 range = regionRange(rg);
-    // The exact province, if the engine's province value is the id's low byte; otherwise the whole region
-    // is filled with the region's own mix (exact region borders, never a guessed split).
-    uint r8 = uint(floor(provR * 255.0 + 0.5));
-    int exact = -1;
-    for (uint i = range.x; i < range.y && i < range.x + 64u; i++)
+    uint2 rr = seedRange(uint(r) + (earth ? 0u : EARTH_REGIONS));
+    // A slow wobble (about 2 degrees) so zone borders wander like real ones, never perfect arcs.
+    float3 eastV = normalize(cross(float3(0.0, 1.0, 0.0), up) + float3(1e-5, 0.0, 0.0));
+    float3 northV = cross(up, eastV);
+    float2 wq = float2(aaOct(up, 0.05, fw, 11.0) + 0.5 * aaOct(up, 0.14, fw, 5.0), aaOct(up, 0.05, fw, 23.0) + 0.5 * aaOct(up, 0.14, fw, 9.0)) - 0.75;
+    float2 wf = float2(aaOct(up, 0.45, fw, 31.0) + 0.5 * aaOct(up, 1.2, fw, 41.0), aaOct(up, 0.45, fw, 37.0) + 0.5 * aaOct(up, 1.2, fw, 43.0)) - 0.75;
+    float3 p = normalize(up + (eastV * wq.x + northV * wq.y) * 0.085 + (eastV * wf.x + northV * wf.y) * 0.016);
+    float best = 0.0, second = 0.0, acc = 0.0;
+    uint gb = 0u, gs = 0u, cur = 0xFFFFu;
+    for (uint i = rr.x; i < rr.y && i < rr.x + 128u; i++)
     {
-        if (((provinceCentre(i) >> 21) & 255u) == r8) { exact = int(i); break; }
+        uint2 e = seedEntry(i);
+        uint g = e.x >> 22;
+        if (g != cur)
+        {
+            if (cur != 0xFFFFu) ethTake(cur, acc, best, second, gb, gs);
+            cur = g; acc = 0.0;
+        }
+        float lat = radians(float(e.x & 1023u) / 1023.0 * 180.0 - 90.0);
+        float lon = radians(float((e.x >> 10) & 2047u) / 2047.0 * 360.0 - 180.0);
+        float3 c = float3(cos(lat) * cos(lon), sin(lat), -cos(lat) * sin(lon));
+        float d = degrees(acos(clamp(dot(p, c), -1.0, 1.0)));
+        float w = float(e.y & 255u) / 32.0;
+        float rad = float((e.y >> 8) & 255u) / 8.0;
+        if (((e.x >> 21) & 1u) != 0u)
+            w *= 0.45 + 2.2 * city;
+        float q = d / rad;
+        acc += w * exp(-q * q);
     }
-    uint g1, g2;
-    float s1, s2;
-    if (exact >= 0)
-    {
-        uint3 mx = provinceMix(uint(exact));
-        g1 = mx.x & 511u; g2 = (mx.x >> 9) & 511u;
-        s1 = float((mx.y >> 16) & 127u) / 100.0; s2 = float((mx.x >> 18) & 127u) / 100.0;
-    }
-    else
-    {
-        uint2 rm = regionMix(rg);
-        g1 = rm.x & 511u; g2 = (rm.x >> 9) & 511u;
-        s1 = float(rm.y & 127u) / 100.0; s2 = float((rm.x >> 18) & 127u) / 100.0;
-    }
-    mixed = 1.0 - s1;
-    float3 c1 = ethColour(g1);
-    if (s2 < 0.25 || g2 == g1)
-        return c1;
-    float3 c2 = ethColour(g2);
-    // Stripe width follows the minority's weight (a quarter to half of each period).
-    float f = clamp(s2 / max(s1 + s2, 1e-3), 0.25, 0.5);
-    float aa = max(stripeW, 1e-4);
-    float band = smoothstep(f - aa, f + aa, stripe) * (1.0 - smoothstep(1.0 - aa, 1.0, stripe));
-    float3 striped = lerp(c2, c1, band);
-    // Too far out to draw stripes cleanly: show the blend instead of shimmering lines.
-    return lerp(striped, lerp(c1, c2, f), smoothstep(0.18, 0.35, stripeW));
+    if (cur != 0xFFFFu) ethTake(cur, acc, best, second, gb, gs);
+    float3 empty = float3(0.46, 0.44, 0.40);
+    if (best <= 0.0)
+        return empty;
+    // Smooth, anti-aliased edge where two zones meet; up close a thin ink line along it.
+    float gap = log(best / max(second, 1e-5));
+    float aa = 0.012 + fw * 0.25;
+    float k = second > 0.0 ? 0.5 * (1.0 - smoothstep(0.0, aa, gap)) : 0.0;
+    float3 col = lerp(ethColour(gb), ethColour(gs), k);
+    float ink = second > 0.0 ? (1.0 - smoothstep(0.0, aa * 0.6, gap)) * (1.0 - smoothstep(0.03, 0.15, fw)) : 0.0;
+    col *= 1.0 - 0.22 * ink;
+    // Thinly peopled land (no people strong here) fades toward a neutral ground colour.
+    col = lerp(empty, col, smoothstep(0.02, 0.15, best));
+    mixed = second / best;
+    return col;
 }
 
 // Helios's map styles for a planet surface, from GlobeTerrain's globe shader (u_style branches).
@@ -640,10 +655,7 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
         float2 duv = fwidth(input.uv) * float2(360.0 * cos(radians(lat)), 180.0);
         float fw = max(max(duv.x, duv.y), 1e-4);
         float4 pdN = dataTexture.Load(int3(int2(clamp(input.uv, 0.0, 0.9999) * float2(dataDims())), 0));
-        // Diagonal stripes in map degrees (period 1.5 deg, which divides 360, so no seam at the date line).
-        float st = (input.uv.x * 360.0 - (90.0 - input.uv.y * 180.0)) / 1.5;
-        float stW = min(fwidth(st), 1.0);
-        float3 pc = peoplesAt(pdN.r, pdN.g, (surfaceFlags() & 32u) != 0u, frac(st), stW, mixed);
+        float3 pc = peoplesAt(up, pdN.g, (surfaceFlags() & 32u) != 0u, smoothstep(0.05, 0.6, ul), fw, mixed);
         // Gentler colours: a touch less saturated, so a map of hundreds of peoples stays easy on the eye.
         float pl = dot(pc, float3(0.299, 0.587, 0.114));
         pc = lerp(float3(pl, pl, pl), pc, 0.86);
