@@ -125,7 +125,7 @@ obj = os.path.join(BUILD, 'people_window.o'); dll = os.path.join(BUILD, 'people_
 subprocess.check_call(['clang', '--target=x86_64-pc-windows-gnu', '-O2', '-ffreestanding', '-fno-builtin', '-nostdlib',
                        '-fno-stack-protector', '-mno-stack-arg-probe', '-fno-asynchronous-unwind-tables', '-fno-unwind-tables',
                        '-fno-jump-tables', '-mno-red-zone', '-I', BUILD, '-c', os.path.join(REPO, 'patch/people_window.c'), '-o', obj])
-subprocess.check_call(['lld-link', '/dll', '/noentry', '/nodefaultlib', '/export:pw_hook', '/export:pw_ui', '/export:pw_push', '/export:pw_frame_stub', '/merge:.rdata=.text', '/merge:.data=.text',
+subprocess.check_call(['lld-link', '/dll', '/noentry', '/nodefaultlib', '/export:pw_hook', '/export:pw_ui', '/export:pw_push', '/export:pw_frame_stub', '/export:pw_aniso_on', '/export:pw_aniso_off', '/merge:.rdata=.text', '/merge:.data=.text',
                        '/merge:.bss=.text', '/section:.text,ERW', '/opt:noref', '/out:' + dll, obj], stdout=subprocess.DEVNULL)
 dd = open(dll, 'rb').read()
 pe = struct.unpack_from('<I', dd, 0x3c)[0]; n = struct.unpack_from('<H', dd, pe + 6)[0]; so = struct.unpack_from('<H', dd, pe + 20)[0]
@@ -202,5 +202,10 @@ d[co] = 0xE8; struct.pack_into('<i', d, co + 1, at('pw_frame_stub') - (0x1400a59
 co = va2off(0x14057ad78)
 assert bytes(d[co:co + 2]) == b'\xff\x25' and 0x14057ad78 + 6 + struct.unpack_from('<i', d, co + 2)[0] == 0x1408b76f0, 'unexpected push thunk'
 d[co] = 0xE9; struct.pack_into('<i', d, co + 1, at('pw_push') - (0x14057ad78 + 5)); d[co + 5] = 0x90
+# 0.1.27: anisotropic filtering in the sampler setup (two 11-byte stores become calls + 6-byte nops)
+for site, old, fn in ((0x14009af05, 'c78424a400000000007a44', 'pw_aniso_on'), (0x14009b094, 'c78424a800000004000000', 'pw_aniso_off')):
+    co = va2off(site)
+    assert bytes(d[co:co + 11]) == bytes.fromhex(old), 'unexpected sampler code at %x' % site
+    d[co] = 0xE8; struct.pack_into('<i', d, co + 1, at(fn) - (site + 5)); d[co + 5:co + 11] = bytes.fromhex('660f1f440000')
 open(EXE, 'wb').write(d)
 print(f'injected .astra at {BASE + new_va:#x} ({raw_sz} bytes); call at {CALL_SITE:#x} -> pw_hook')

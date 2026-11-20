@@ -173,6 +173,21 @@ __asm__(
     "  movq 0x580(%rsp), %rdx\n"
     "  ret\n");
 
+/* 0.1.27: 16x anisotropic filtering on the texture samplers, so the 8K maps stay sharp when the globe is
+   seen at an angle (instead of dropping to blurry low mip levels). pw_aniso_on replaces the sampler
+   setup's 'maxLod = 1000' store; pw_aniso_off clears it again for the shadow-map compare sampler. */
+__asm__(
+    ".text\n.globl pw_aniso_on\npw_aniso_on:\n"
+    "  movl $0x447a0000, 0xac(%rsp)\n"      /* maxLod = 1000 (the replaced instruction; +8 for the return address) */
+    "  movl $1, 0x98(%rsp)\n"               /* anisotropyEnable = VK_TRUE */
+    "  movl $0x41800000, 0x9c(%rsp)\n"      /* maxAnisotropy = 16 */
+    "  ret\n"
+    ".globl pw_aniso_off\npw_aniso_off:\n"
+    "  movl $4, 0xb0(%rsp)\n"               /* borderColor = 4 (the replaced instruction) */
+    "  movl $0, 0x98(%rsp)\n"
+    "  movl $0, 0x9c(%rsp)\n"
+    "  ret\n");
+
 static int project(float x, float y, float z, float W, float H, float *sx, float *sy)
 {
     const float *m = g.vp;

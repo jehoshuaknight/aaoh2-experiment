@@ -752,8 +752,11 @@ float3 heliosStyledSurface(VertexOutput input, float4 texel, float style)
             // Atlas look (0.1.25), as you zoom in: paper grain, and mixed-population zones hatched
             // with fine diagonal lines, the way printed ethnographic maps show them.
             float zin = 1.0 - smoothstep(0.03, 0.10, fw);
-            float grain = detailNoise(up * 3000.0) * 0.6 + detailNoise(up * 9000.0) * 0.4;
-            S *= lerp(1.0, 0.93 + 0.12 * grain, zin);
+            if (zin > 0.0)
+            {
+                float grain = detailNoise(up * 3000.0) * 0.6 + detailNoise(up * 9000.0) * 0.4;
+                S *= lerp(1.0, 0.93 + 0.12 * grain, zin);
+            }
             float2 hp = float2(lon * cos(radians(lat)), lat);
             float hv = (hp.x + hp.y) / 0.22;
             float hl = abs(frac(hv) - 0.5) / max(fwidth(hv), 1e-4);
@@ -1227,6 +1230,7 @@ float4 fragmentLit(VertexOutput input) : SV_Target
         albedo *= closeTone;
     }
     float4 provinceData = dataTexture.Sample(input.uv);
+    bool marsSurf = surface && marsLikeSurface(input.uv, flags);   // 0.1.27: once per pixel
     bool provinces = (flags & 1u) != 0u && draw.extra.w >= 0.0;
     float water = surface ? saturate((0.5 - texel.a) * 8.0) : 0.0;
     float sunUp = dot(up, toSun);
@@ -1270,7 +1274,7 @@ float4 fragmentLit(VertexOutput input) : SV_Target
             albedo *= lerp(1.0, 0.82, water * (1.0 - shelf));
         }
         // Mars (0.1.24): seasonal frost caps from the sun's real latitude, and drifting dust storms.
-        if (!flat && marsLikeSurface(input.uv, flags))
+        if (!flat && marsSurf)
         {
             float3 axis = normalize(draw.model[1].xyz);
             float latD = degrees(asin(clamp(dot(up, axis), -1.0, 1.0)));
@@ -1365,12 +1369,12 @@ float4 fragmentLit(VertexOutput input) : SV_Target
         float3 h = normalize(toSun + toCamera);
         float lit = step(0.0, sunUp) * visibility * shade;
         float3 wn = up;
-        if (water > 0.0 && !flat)
+        float camW = length(frame.cameraPosition.xyz - draw.model[3].xyz) / length(draw.model[0].xyz) - 1.0;
+        float near = saturate((1.2 - camW) / 1.1);
+        if (water > 0.0 && !flat && near > 0.0 && lit > 0.0)   // 0.1.27: only where the waves can be seen
         {
             // Waves (0.1.24): wind ripples drifting with time tilt the water, so the sun glint
             // breaks into sparkle; stronger close in.
-            float camW = length(frame.cameraPosition.xyz - draw.model[3].xyz) / length(draw.model[0].xyz) - 1.0;
-            float near = saturate((1.2 - camW) / 1.1);
             float3 wA = normalize(cross(up, abs(up.y) < 0.95 ? float3(0, 1, 0) : float3(1, 0, 0)));
             float3 wB = cross(up, wA);
             float tw = frame.misc.y;
@@ -1433,7 +1437,7 @@ float4 fragmentLit(VertexOutput input) : SV_Target
         float night = 1.0 - smoothstep(-0.15, 0.05, sunUp);
         float dens = smoothstep(0.03, 0.7, li);
         float3 gc = lerp(float3(1.0, 0.50, 0.16), float3(1.0, 0.74, 0.45), smoothstep(0.7, 1.0, li));
-        bool marsNight = marsLikeSurface(input.uv, flags);
+        bool marsNight = marsSurf;
         if (marsNight)
             gc = lerp(float3(0.70, 0.85, 1.0), float3(0.92, 0.96, 1.0), smoothstep(0.6, 1.0, li));   // dome lights
         // Dusk (0.1.24): the lights come on block by block as the sun goes down, not all at once.
@@ -1643,7 +1647,7 @@ float4 fragmentVolumetricClouds(VertexOutput input) : SV_Target
     // Cyclones (0.1.24): on white (Earth-like) decks, storms twist the cloud into spirals round an eye.
     float stormBand = 0.0, stormEye = 0.0;
     bool whiteDeck = dot(abs(draw.baseColor.rgb - 1.0), float3(1.0, 1.0, 1.0)) < 0.1 && draw.params.z < 1.5;
-    if (whiteDeck)
+    if (whiteDeck && abs(uv.y - 0.5) < 0.2)                    // 0.1.27: storms live within ~36 degrees of the equator
     {
         float3 pdir = directionFromMap(frac(uv));
         float3 tw = cycloneWarp(pdir, time, stormBand, stormEye);

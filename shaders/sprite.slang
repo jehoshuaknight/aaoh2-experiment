@@ -108,11 +108,11 @@ float4 fragmentMain(SpriteOutput input) : SV_Target
         // nebulae: wisps and dark lanes in the sprite's colour, drifting very slowly.
         float px = 2.0 / max(fwidth(input.local.x), 1e-5);   // sprite size on screen, pixels
         float neb = smoothstep(160.0, 420.0, px);
-        if (neb > 0.0)
+        if (neb > 0.0 && intensity * input.color.a > 0.002)     // 0.1.27: no noise where the glow is invisible
         {
             float3 q = float3(input.local * 2.2, 0.0) + input.world * 0.002 + float3(0.0, 0.0, input.time * 0.004);
-            float w = spFbm(q + spFbm(q * 0.7) * 1.6);
-            float lanes = smoothstep(0.30, 0.55, spFbm(q * 1.7 + 11.0));
+            float w = spNoise(q + spNoise(q * 0.7) * 1.6) * 0.62 + spNoise(q * 2.03 + 7.1) * 0.38;
+            float lanes = smoothstep(0.30, 0.55, spNoise(q * 1.7 + 11.0) * 0.7 + spNoise(q * 3.9 + 5.0) * 0.3);
             float wisp = (0.35 + 1.3 * smoothstep(0.35, 0.8, w)) * lerp(0.55, 1.0, lanes);
             intensity = lerp(intensity, intensity * wisp, neb);
             float3 hue = lerp(input.color.rgb, input.color.rgb * float3(0.85, 0.75, 1.25), smoothstep(0.5, 0.8, w));
